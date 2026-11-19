@@ -1224,6 +1224,7 @@ function vAccess(){
   </tbody></table></div></section>
   ${S.former.length?`<section class="panel"><header><h2>Former team members</h2><span class="muted">Can't sign in. Their past work stays in reports and history.</span></header><div class="scroll"><table><thead><tr><th>Name</th><th>Department</th><th>Position</th><th>Office</th><th>Still listed on</th><th></th></tr></thead><tbody>${S.former.slice().sort((a,b)=>a.name.localeCompare(b.name)).map(p=>{const tie=personTies(p.name);return`<tr><td><b style="font-weight:600">${esc(p.name)}</b></td><td>${esc(p.dept||"")}</td><td>${esc(p.position||"")}</td><td>${esc(p.office||"")}</td><td>${tie.clients.length||tie.reportees.length?`<span class="chip warn">${esc([tie.clients.length?tie.clients.length+" client team"+(tie.clients.length>1?"s":""):"",tie.reportees.length?tie.reportees.length+" reportee"+(tie.reportees.length>1?"s":""):""].filter(Boolean).join(" · "))}</span><div class="muted" style="font-size:12px">${esc([...tie.clients,...tie.reportees.map(n=>"reportee: "+n)].join(", "))}</div>`:`<span class="muted">Nothing</span>`}</td><td style="white-space:nowrap">${ceo&&S.canWrite?`<button class="btn sm" data-restoreperson="${esc(p._id)}">Restore</button> <button class="btn sm ghost" data-delperson="${esc(p._id)}" style="color:var(--bad)">Delete for good</button>`:""}</td></tr>`}).join("")}</tbody></table></div></section>`:""}
   ${checkinPanel(ceo)}
+  ${leadPanel(ceo)}
   ${officesPanel(ceo||isOps(S.me))}
   <section class="panel"><header><h2>Add a person</h2></header><div class="body"><form id="addPerson" class="form" novalidate>
     <div class="field"><label for="ap-name">Full name</label><input id="ap-name" required></div>
@@ -1555,11 +1556,14 @@ function vShoots(){
 const DESK_DEPTS=["Design","Video Editing"];
 const UNIT={"Static":1,"Story":0.5,"Carousel":2,"Reel":3,"Motion":3,"Banner / ad creative":1,"Calendar":1,"Caption / copy":0.5};
 const MULTI=["Static","Story","Banner / ad creative"];
-const DEFAULT_CAP=25,LEAD_DAYS=3;
+const DEFAULT_CAP=25;
+// planning lead time: content approved / design delivered at least this many days before it goes live (CEO sets it; 3 to start, 10 later)
+const leadDays=()=>{const v=+((S.appSettings||[]).find(x=>x._id==="lead_days")?.value);return[3,5,7,10].includes(v)?v:3};
+const minDesignDue=()=>addDays(todayISO(),leadDays());
 const SCOPE_TYPES=["Static","Carousel","Reel","Story","Motion","Banner / ad creative"];
 const isDesk=t=>DESK_DEPTS.includes(t.dept);
 const isCoord=n=>person(n)?.desk==="Design";
-const deskLead=()=>S.team.find(p=>p.desk==="Design"&&p.active!==false)?.name||"";
+const deskLead=()=>(S.team.filter(p=>p.desk==="Design"&&p.active!==false).sort((a,b)=>(a.role==="ops"?0:1)-(b.role==="ops"?0:1))[0])?.name||"";
 const canDesk=()=>role()==="ceo"||isOps(S.me)||isCoord(S.me);
 const units=t=>{const u=UNIT[t.type]??1;return MULTI.includes(t.type)?u*Math.min(20,Math.max(1,parseInt(t.count)||1)):u};
 const fmtU=n=>Math.round(n*10)/10;
@@ -1632,7 +1636,7 @@ async function makeFromCalendar(m,btn){
     for(const p of posts){
       const type=TYPES.includes(p.format)?p.format:"Static",dept=["Reel","Motion"].includes(type)?"Video Editing":"Design";
       const c=S.clients.find(x=>x.name===p.client);
-      const due=[addDays(p.date,-LEAD_DAYS),todayISO()].sort().pop();
+      const due=[addDays(p.date,-(leadDays()+2)),todayISO()].sort().pop();
       const owner=p.designer&&person(p.designer)?.dept==="Creative"?p.designer:"";
       const body={id:nextId(p.client,dept),raised:todayISO(),client:p.client,am:p.am||c?.am||"",dept,type,
         title:`${type}: ${String(p.pillar||p.caption||"calendar post").slice(0,60)} (goes live ${fmtD(p.date)})`,brief:p.caption||"",ref:p.media||"",
@@ -1672,7 +1676,7 @@ function designerSelect(t,attr){
 }
 function vDesk(){
   const lockOffice=isCoord(S.me)&&role()==="employee";
-  if(!S.deskOffice||lockOffice)S.deskOffice=isCoord(S.me)?(person(S.me)?.office||"all"):"all";
+  if(!S.deskOffice||lockOffice)S.deskOffice=lockOffice?(person(S.me)?.office||"all"):"all";
   const mode=S.deskMode||"queue",lead=deskLead();
   const offices=[...new Set(S.team.filter(p=>p.dept==="Creative").map(p=>p.office).filter(Boolean))].sort();
   const qc=deskTasks().filter(t=>t.status==="Internal review"&&!t.qcBy&&inOffice(t));
@@ -1847,15 +1851,18 @@ async function convertLead(id,btn){
 }
 
 /* ===== KRA & KPI ===== */
-const AUTO_KPI={discipline:"Work discipline: on-time HQ login and work check-ins",punctuality:"Days started on time % (from HQ)",dayupdates:"End-of-day updates filed % (from HQ)",delivered:"Tasks delivered (from HQ)",ontime:"On-time % (from HQ)",revisions:"Avg. revision rounds (from HQ)",overdue:"Overdue tasks now (from HQ)",sentback:"Times sent back (from HQ)"};
+const AUTO_KPI={discipline:"Work discipline: on-time HQ login and work check-ins",punctuality:"Days started on time % (from HQ)",dayupdates:"End-of-day updates filed % (from HQ)",delivered:"Tasks delivered (from HQ)",ontime:"On-time % (from HQ)",revisions:"Avg. revision rounds (from HQ)",overdue:"Overdue tasks now (from HQ)",sentback:"Times sent back (from HQ)",
+  checkins:"Work check-ins answered % (from HQ)",posts_live:"Brand posts live with link % (from the content calendar)",reports:"Monthly reports filled % (from HQ reports)",feedback:"Client notes answered within 1 day % (from HQ)",
+  seo_kw:"Keywords in Google top 10, change vs last month (from reports)",seo_traffic:"Organic visits, change vs last month (from reports)",ads_results:"Ad leads / sales, change vs last month (from reports)",ads_cpr:"Cost per lead / sale, change vs last month (from reports)",
+  bd_wins:"New clients won (from New wins)",bd_pipeline:"Open deal value (from New wins)"};
 const KRA_TEMPLATES={
   "Creative":[["Timely delivery","Share of pieces delivered by the due date","90%",30,"ontime"],["Quality","Average revision rounds per piece","1 or less",30,"revisions"],["Output","Pieces delivered in the month","As planned on the Design desk",25,"delivered"],["Craft & learning","New skill, template or process improvement","1 per month",15,""]],
-  "Account Management":[["Client delivery","Calendar posts published on the planned date","95%",30,""],["Client satisfaction","Client approvals without escalation","No escalations",25,""],["Reporting","Monthly report filled by the 5th","On time",20,""],["Team coordination","Tasks briefed with full details on HQ","100%",25,"ontime"]],
-  "Performance Marketing":[["Campaign results","Results vs target in the monthly report","As agreed per client",40,""],["Spend efficiency","Cost per result vs last month","Lower or equal",30,""],["Timely delivery","Share of tasks delivered by the due date","90%",30,"ontime"]],
-  "SEO":[["Rankings","Keywords in top 10 vs last month","Growing",35,""],["Traffic","Organic sessions vs last month","Growing",35,""],["Timely delivery","Share of tasks delivered by the due date","90%",30,"ontime"]],
+  "Account Management":[["Client delivery","Brand posts live with link on the planned date","95%",30,"posts_live"],["Client satisfaction","Client notes answered within 1 day","100%",25,"feedback"],["Reporting","Monthly reports filled for my brands","100%",20,"reports"],["Team coordination","Tasks delivered by the due date","90%",25,"ontime"]],
+  "Performance Marketing":[["Campaign results","Leads / sales vs last month","Growing",40,"ads_results"],["Spend efficiency","Cost per lead / sale vs last month","Lower or equal",30,"ads_cpr"],["Timely delivery","Share of tasks delivered by the due date","90%",30,"ontime"]],
+  "SEO":[["Rankings","Keywords in top 10 vs last month","Growing",35,"seo_kw"],["Traffic","Organic visits vs last month","Growing",35,"seo_traffic"],["Timely delivery","Share of tasks delivered by the due date","90%",30,"ontime"]],
   "Website":[["Timely delivery","Share of tasks delivered by the due date","90%",40,"ontime"],["Quality","Bugs reported after go-live","0 critical",30,"revisions"],["Output","Website tasks delivered","As planned",30,"delivered"]],
   "Production":[["Shoots on schedule","Shoots done on the planned date","95%",40,"ontime"],["Raw files handed over","Files on Drive within 24 hours","100%",30,""],["Shoot planning","Shoot plan shared 3 days ahead","100%",30,""]],
-  "Business Development":[["New business","New clients won in the month","2",40,""],["Pipeline","Value of open deals","₹3,00,000 / month",30,""],["Follow-ups","Follow-ups done on time","90%",30,""]],
+  "Business Development":[["New business","New clients won in the month","2",40,"bd_wins"],["Pipeline","Value of open deals","₹3,00,000",30,"bd_pipeline"],["Follow-ups","Follow-ups done on time","90%",30,""]],
   "_":[["Timely delivery","Share of tasks delivered by the due date","90%",40,"ontime"],["Quality","Work sent back for changes","2 or fewer",30,"sentback"],["Ownership","Tasks updated on HQ the same day","Always",30,""]]
 };
 function kraTemplate(dept){const base=(KRA_TEMPLATES[dept]||KRA_TEMPLATES._).map(x=>x.slice());const i=base.reduce((bi,x,j)=>x[3]>base[bi][3]?j:bi,0);base[i][3]-=10;base.push(["Work discipline","Logged in to HQ on time (by the office day start)","95%",10,"discipline"]);return base}
@@ -1866,7 +1873,46 @@ function kraPeople(){
   if(role()==="ceo"||role()==="hr")return all.sort((a,b)=>(a.dept||"").localeCompare(b.dept||"")||a.name.localeCompare(b.name));
   const tree=reportsTree(S.me);return all.filter(p=>tree.has(p.name)).sort((a,b)=>(a.name===S.me?-1:b.name===S.me?1:a.name.localeCompare(b.name)));
 }
-function autoVal(key,r,ds){if(!key)return null;if(["discipline","punctuality","dayupdates"].includes(key)){const v=ds?.[key];return v==null?"—":v+"%"}if(!r)return null;return{delivered:String(r.done.length),ontime:r.rate==null?"—":r.rate+"%",revisions:r.revs==null?"—":r.revs.toFixed(1),overdue:String(r.over),sentback:String(r.sentBack)}[key]??null}
+// brands a person works on for one role (am / pm / seo), incl. extra team members
+const brandsAs=(n,rl)=>S.clients.filter(c=>(c.status||"Active")!=="Inactive"&&(rl==="am"?isAmOf(c,n):(c[rl]===n||extrasOf(c.name,rl).includes(n)))).map(c=>c.name);
+const pctChg=(a,b)=>a==null||b==null||!+b?null:Math.round((a-b)/b*100);
+const sumRep=(cs,m,f)=>{const rs=S.reports.filter(r=>cs.includes(r.client)&&r.month===m&&r[f]!=null&&r[f]!=="");return rs.length?rs.reduce((a,r)=>a+(+r[f]||0),0):null};
+// value + number for the data-driven KPIs that aren't from tasks/attendance
+function autoData(key,n,m){
+  const prev=addDays(m+"-01",-1).slice(0,7),t=todayISO();
+  const fmtChg=(v,unit)=>v==null?{v:"No data yet",n:null}:{v:(v>0?"+":"")+v+"%"+(unit?" "+unit:""),n:v};
+  if(key==="posts_live"){const cs=brandsAs(n,"am"),ps=S.posts.filter(p=>cs.includes(p.client)&&String(p.date||"").slice(0,7)===m&&p.date<=t);if(!ps.length)return{v:"No posts due yet",n:null};const live=ps.filter(isDelivered).length,x=Math.round(live/ps.length*100);return{v:`${x}% (${live}/${ps.length})`,n:x}}
+  if(key==="reports"){const rl=person(n)?.dept==="SEO"?"seo":person(n)?.dept==="Performance Marketing"?"pm":"am",cs=brandsAs(n,rl);if(!cs.length)return{v:"No brands",n:null};const F={am:["followers","er","notes"],pm:["spend","results","revenue"],seo:["kw","sessions"]}[rl];const done=cs.filter(c=>S.reports.some(r=>r.client===c&&r.month===m&&F.some(f=>r[f]!=null&&r[f]!==""))).length,x=Math.round(done/cs.length*100);return{v:`${x}% (${done}/${cs.length} brands)`,n:x}}
+  if(key==="feedback"){const cs=brandsAs(n,"am"),fs=(S.feedback||[]).filter(f=>cs.includes(f.client)&&String(f.createdAt||"").slice(0,7)===m);if(!fs.length)return{v:"No client notes",n:null};const ok=fs.filter(f=>f.repliedAt&&(new Date(f.repliedAt)-new Date(f.createdAt))<=864e5).length,x=Math.round(ok/fs.length*100);return{v:`${x}% (${ok}/${fs.length})`,n:x}}
+  if(key==="seo_kw"||key==="seo_traffic"){const cs=brandsAs(n,"seo"),f=key==="seo_kw"?"kw":"sessions";return fmtChg(pctChg(sumRep(cs,m,f),sumRep(cs,prev,f)))}
+  if(key==="ads_results"){const cs=brandsAs(n,"pm");return fmtChg(pctChg(sumRep(cs,m,"results"),sumRep(cs,prev,"results")))}
+  if(key==="ads_cpr"){const cs=brandsAs(n,"pm"),cpr=mm=>{const sp=sumRep(cs,mm,"spend"),rs=sumRep(cs,mm,"results");return sp&&rs?sp/rs:null};return fmtChg(pctChg(cpr(m),cpr(prev)))}
+  if(key==="bd_wins"){const w=S.leads.filter(l=>l.stage==="Won"&&(l.owner===n||l.by===n)&&String(l.wonOn||"").slice(0,7)===m).length;return{v:String(w),n:w}}
+  if(key==="bd_pipeline"){const v=S.leads.filter(l=>(l.owner===n||l.by===n)&&!["Won","Lost"].includes(l.stage)).reduce((a,l)=>a+(+l.value||0),0);return{v:inr(v),n:v}}
+  return null;
+}
+const LOWER_BETTER=["revisions","overdue","sentback","ads_cpr"];
+// compare a KPI result with its target: met / close / missed (null = can't tell)
+function targetCheck(key,num,target){
+  if(num==null||!target)return null;const tg=String(target).toLowerCase().replace(/,/g,"");
+  const lower=LOWER_BETTER.includes(key)||/or less|or fewer|lower|max|at most|0 critical/.test(tg);
+  if(/growing|grow|increase|up/.test(tg)&&!/\d/.test(tg))return num>0?"met":num===0?"close":"missed";
+  if(/lower or equal|lower/.test(tg)&&!/\d/.test(tg))return num<=0?"met":num<=10?"close":"missed";
+  const mt=tg.match(/-?\d+(\.\d+)?/);if(!mt)return null;const goal=+mt[0];
+  if(lower)return num<=goal?"met":num<=goal*1.25+0.5?"close":"missed";
+  return num>=goal?"met":num>=goal*0.9?"close":"missed";
+}
+const TC={met:["✓ Target met","ok"],close:["Close to target","warn"],missed:["Below target","bad"]};
+const tcChip=c=>c?`<span class="chip ${TC[c][1]}" style="font-size:11px">${TC[c][0]}</span>`:"";
+const suggestRating=c=>c==="met"?4:c==="close"?3:c==="missed"?2:null;
+// one KRA row's result: {v, n, check}
+function kraResult(k,r,ds){
+  let v=null,num=null;
+  if(k.auto){const d=autoData(k.auto,k.person,k.period);if(d){v=d.v;num=d.n}else{v=autoVal(k.auto,r,ds);num=v==null?null:parseFloat(String(v).replace(/[^\d.-]/g,""));if(isNaN(num))num=null}}
+  else{v=k.actual??null;const x=v==null?NaN:parseFloat(String(v).replace(/[^\d.-]/g,""));num=isNaN(x)?null:x}
+  return{v,n:num,check:targetCheck(k.auto||"",num,k.target)};
+}
+function autoVal(key,r,ds){if(!key)return null;if(["discipline","punctuality","dayupdates","checkins"].includes(key)){const v=ds?.[key];return v==null?"—":v+"%"}if(!r)return null;return{delivered:String(r.done.length),ontime:r.rate==null?"—":r.rate+"%",revisions:r.revs==null?"—":r.revs.toFixed(1),overdue:String(r.over),sentback:String(r.sentBack)}[key]??null}
 const stars=n=>n?`<span style="color:var(--green);letter-spacing:1px" aria-label="${n} out of 5">${"★".repeat(n)}<span style="color:var(--line)">${"★".repeat(5-n)}</span></span>`:`<span class="muted">Not rated</span>`;
 const LAYERS=[["self","Self"],["manager","Manager"],["hr","HR"],["ceo","CEO"]];
 const halfLabel=(h,m)=>h===1?"1st–15th":`16th–${new Date(+m.slice(0,4),+m.slice(5,7),0).getDate()}th`;
@@ -1907,28 +1953,42 @@ function vKra(){
   ${todo.length&&!(todo.length===1&&todo[0].name===who)?`<div class="notice warn"><b>Waiting for your rating (${esc(halfLabel(h,m))}):</b> ${todo.map(x=>`<button class="linkbtn" data-kraperson="${esc(x.name)}" style="margin-right:10px">${esc(x.name)}${x.name===S.me?" (yourself)":""}</button>`).join("")}</div>`:""}
   <div class="kpis"><div class="kpi ${cls(sh)}"><b>${sh==null?"—":sh+"%"}</b><span>Score ${esc(halfLabel(h,m))}</span></div><div class="kpi ${cls(month)}"><b>${month==null?"—":month+"%"}</b><span>Month score</span></div><div class="kpi"><b>${r?r.done.length:"—"}</b><span>Delivered in ${monthName(m).split(" ")[0]}</span></div><div class="kpi ${r&&r.rate!=null&&r.rate<80?"warn":""}"><b>${r&&r.rate!=null?r.rate+"%":"—"}</b><span>On time</span></div><div class="kpi ${ds.discipline!=null&&ds.discipline<80?"warn":""}"><b>${ds.discipline==null?"—":ds.discipline+"%"}</b><span>Work discipline (${ds.started}/${ds.work} days)</span></div></div>
   <section class="panel"><header><h2>Key result areas · ${esc(monthName(m))} · ${esc(halfLabel(h,m))}</h2><span class="filters">${wsum&&wsum!==100?`<span class="chip warn">Weights add up to ${wsum}%</span>`:""}${can?`${!rows.length&&prev.length?`<button class="btn sm" data-kracopy="${esc(m)}">Copy ${esc(monthName(prevM).split(" ")[0])}'s KRAs</button>`:""}${!rows.length?`<button class="btn sm" data-kratpl="${esc(m)}">Use suggested KRAs for ${esc(p?.dept||"this role")}</button>`:""}<button class="btn sm primary" data-kranew="1">Add KRA</button>`:""}</span></header>
-  ${rows.length?`<div class="scroll"><table><thead><tr><th>KRA</th><th>KPI · target</th><th class="num">Weight</th><th>Result</th>${LAYERS.map(([,l])=>`<th>${l}</th>`).join("")}<th>Final</th><th></th></tr></thead><tbody>${rows.map(k=>{const av=autoVal(k.auto,r,ds),fin=finalOf(k._id,h),my=lay?reviewOf(k._id,h,lay):null;
-    return`<tr><td style="min-width:130px"><b style="font-weight:600">${esc(k.kra)}</b>${k.auto?`<div><span class="tag">Auto from HQ</span></div>`:""}</td><td class="muted" style="min-width:170px">${esc(k.kpi||"")}${k.target?`<div><b style="color:var(--ink);font-weight:600">Target:</b> ${esc(k.target)}</div>`:""}</td><td class="num">${k.weight!=null?esc(k.weight)+"%":"—"}</td><td style="min-width:110px"><b>${esc(av??k.actual??"—")}</b>${k.selfNote?`<div class="muted" style="font-size:12px">${esc(k.selfNote)}</div>`:""}</td>
+  ${rows.length?`<div class="scroll"><table><thead><tr><th>KRA</th><th>KPI · target</th><th class="num">Weight</th><th>Result</th>${LAYERS.map(([,l])=>`<th>${l}</th>`).join("")}<th>Final</th><th></th></tr></thead><tbody>${rows.map(k=>{const kr=kraResult(k,r,ds),av=kr.v,fin=finalOf(k._id,h),my=lay?reviewOf(k._id,h,lay):null;
+    return`<tr><td style="min-width:130px"><b style="font-weight:600">${esc(k.kra)}</b>${k.auto?`<div><span class="tag">Auto from HQ</span></div>`:""}</td><td class="muted" style="min-width:170px">${esc(k.kpi||"")}${k.target?`<div><b style="color:var(--ink);font-weight:600">Target:</b> ${esc(k.target)}</div>`:""}</td><td class="num">${k.weight!=null?esc(k.weight)+"%":"—"}</td><td style="min-width:120px"><b>${esc(av??"—")}</b>${kr.check?`<div>${tcChip(kr.check)}</div>`:""}${k.selfNote?`<div class="muted" style="font-size:12px">${esc(k.selfNote)}</div>`:""}</td>
     ${LAYERS.map(([l])=>{const rv=reviewOf(k._id,h,l);return`<td>${starsSm(rv,rv?`${rv.byName}${rv.note?": "+rv.note:""}`:"")}${rv?.note?`<div class="muted" style="font-size:11px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(rv.note)}">${esc(rv.note)}</div>`:""}</td>`}).join("")}
     <td>${fin?`<b>${fin.rating}/5</b><div class="muted" style="font-size:11px">${esc(layerName[fin.from])}</div>`:`<span class="muted">—</span>`}</td>
     <td style="white-space:nowrap">${lay?`<button class="btn sm ${my?"":"primary"}" data-krarate="${esc(k._id)}">${my?"Change":"Rate"} (${esc(layerName[lay])})</button> `:""}${can?`<button class="btn sm" data-kra="${esc(k._id)}">Edit</button>`:mine&&S.canWrite&&!k.auto?`<button class="btn sm" data-kra="${esc(k._id)}">Result</button>`:""}</td></tr>`}).join("")}</tbody></table></div>`
   :`<div class="empty">${can?`No KRAs set for ${esc(first(who))} in ${esc(monthName(m))} yet. Use the suggested set (${tpl.map(x=>x[0]).join(", ")}) or add your own.`:mine?`Your KRAs for ${esc(monthName(m))} haven't been set yet. The CEO or HR sets them.`:"No KRAs set."}</div>`}</section>
-  <div class="notice green"><b>How it works:</b> the CEO or HR sets 3 to 5 KRAs each month, with a KPI, target and weight (adding up to 100%). Every 15 days (1st–15th and 16th–month end) each KRA is rated 1 to 5 in layers: <b>Self</b> → <b>Manager</b> (reporting manager) → <b>HR</b> → <b>CEO</b>. The <b>Final</b> rating is the highest layer that has rated, and the score uses the weights. KRAs marked <b>Auto from HQ</b> fill their result from the tracker.</div>`;
+  ${ppl.length>1?kraTeamPanel(ppl,m,h):""}
+  <div class="notice green"><b>How it works:</b> the CEO or HR sets 3 to 5 KRAs each month, with a KPI, target and weight (adding up to 100%). Every 15 days (1st–15th and 16th–month end) each KRA is rated 1 to 5 in layers: <b>Self</b> → <b>Manager</b> (reporting manager) → <b>HR</b> → <b>CEO</b>. The <b>Final</b> rating is the highest layer that has rated, and the score uses the weights. KRAs marked <b>Auto from HQ</b> fill their result from the tracker (tasks, content calendar, reports, client notes, New wins, check-ins) and are checked against the target, so ratings can follow the numbers.</div>`;
+}
+function kraTeamPanel(ppl,m,h){
+  const rowsP=ppl.map(p=>{const ks=S.kras.filter(k=>k.person===p.name&&k.period===m);const r=perfRows(m).find(x=>x.p.name===p.name),ds=dayStats(p.name,m);const res=ks.map(k=>kraResult(k,r,ds));
+    const off=res.filter(x=>x.check==="missed").length,met=res.filter(x=>x.check==="met").length;const s1=scoreOf(ks,1),s2=scoreOf(ks,2);const sc=h===1?s1:s2;
+    const pend=ks.filter(k=>!LAYERS.some(([l])=>reviewOf(k._id,h,l))).length;const wsum=ks.reduce((a,k)=>a+(+k.weight||0),0);
+    return{p,ks,off,met,sc,pend,wsum}});
+  const cls=v=>v==null?"":v>=80?"ok":v>=60?"warn":"bad";
+  const noKra=rowsP.filter(x=>!x.ks.length).length,offN=rowsP.filter(x=>x.off).length;
+  return`<section class="panel"><header><h2>Team at a glance · ${esc(monthName(m))} · ${esc(halfLabel(h,m))}</h2><span class="muted">${noKra?`${noKra} without KRAs · `:""}${offN} with a KPI below target</span></header><div class="scroll"><table><thead><tr><th>Person</th><th>Department</th><th class="num">KRAs</th><th>KPIs vs target</th><th class="num">Score</th><th>Not rated yet</th></tr></thead><tbody>
+  ${rowsP.sort((a,b)=>(b.off-a.off)||((a.sc??101)-(b.sc??101))||a.p.name.localeCompare(b.p.name)).map(x=>`<tr class="click" data-kraperson="${esc(x.p.name)}"><td><b style="font-weight:600">${esc(x.p.name)}</b></td><td class="muted">${esc(x.p.dept||"")}</td><td class="num">${x.ks.length||`<span class="chip warn">None set</span>`}${x.ks.length&&x.wsum!==100?` <span class="chip warn" title="Weights add up to ${x.wsum}%">${x.wsum}%</span>`:""}</td>
+  <td>${x.ks.length?`${x.met?`<span class="chip ok">${x.met} met</span> `:""}${x.off?`<span class="chip bad">${x.off} below</span>`:""}${!x.met&&!x.off?`<span class="muted">Needs results</span>`:""}`:"—"}</td><td class="num"><span class="${cls(x.sc)}">${x.sc==null?"—":x.sc+"%"}</span></td><td>${x.ks.length?(x.pend?`${x.pend} KRA${x.pend>1?"s":""}`:`<span class="muted">All rated</span>`):"—"}</td></tr>`).join("")}
+  </tbody></table></div></section>`;
 }
 function openKraReview(kid){
   const k=S.kras.find(x=>x._id===kid);if(!k)return;
   const m=k.period,t=todayISO(),cur=t.slice(0,7),h=S.kraHalf||(m===cur?(+t.slice(8)<=15?1:2):m<cur?2:1);
-  const lay=myLayerFor(k.person),my=reviewOf(kid,h,lay),r=perfRows(m).find(x=>x.p.name===k.person),ds=dayStats(k.person,m),av=autoVal(k.auto,r,ds);
+  const lay=myLayerFor(k.person),my=reviewOf(kid,h,lay),r=perfRows(m).find(x=>x.p.name===k.person),ds=dayStats(k.person,m),kr=kraResult(k,r,ds),av=kr.v,sug=suggestRating(kr.check);
   const names={"self":"Self","manager":"Manager","hr":"HR","ceo":"CEO"};
   S.drawer={kind:"krarate",id:kid};
   $("#drawerHost").innerHTML=`<div class="scrim" data-close="1"></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dkv" style="width:min(520px,100%)">
   <header><div><div class="eyebrow">${esc(k.person)} · ${esc(monthName(m))} · ${esc(halfLabel(h,m))}</div><h2 id="dkv" style="margin-top:4px">${esc(k.kra)}</h2><div class="muted">You are rating as <b>${esc(names[lay])}</b></div></div><button class="btn ghost" data-close="1" aria-label="Close">✕</button></header>
   <div class="content">
-    <div class="form"><div class="field"><label>KPI</label><div class="ro">${esc(k.kpi||"—")}</div></div><div class="field"><label>Target</label><div class="ro">${esc(k.target||"—")}</div></div><div class="field"><label>Result</label><div class="ro"><b>${esc(av??k.actual??"—")}</b></div></div><div class="field"><label>Weight</label><div class="ro">${k.weight!=null?esc(k.weight)+"%":"—"}</div></div></div>
+    <div class="form"><div class="field"><label>KPI</label><div class="ro">${esc(k.kpi||"—")}</div></div><div class="field"><label>Target</label><div class="ro">${esc(k.target||"—")}</div></div><div class="field"><label>Result</label><div class="ro"><b>${esc(av??"—")}</b> ${tcChip(kr.check)}</div></div><div class="field"><label>Weight</label><div class="ro">${k.weight!=null?esc(k.weight)+"%":"—"}</div></div></div>
     ${k.selfNote?`<div class="brief" style="font-size:13px"><b>${esc(first(k.person))}'s comment:</b> ${esc(k.selfNote)}</div>`:""}
     <div class="section-title">Ratings so far</div>
     <div style="display:flex;flex-direction:column;gap:6px">${LAYERS.map(([l,n])=>{const rv=reviewOf(kid,h,l);return`<div style="display:grid;grid-template-columns:80px auto minmax(0,1fr);gap:10px;align-items:start;font-size:13px"><b>${n}</b>${starsSm(rv)}<span class="muted">${rv?`${esc(rv.byName)}${rv.note?": "+esc(rv.note):""}`:"Not rated yet"}</span></div>`}).join("")}</div>
     <div class="section-title">Your rating</div>
+    ${sug?`<div class="notice ${kr.check==="met"?"green":"warn"}" style="font-size:13px">From the data: <b>${esc(TC[kr.check][0])}</b>, so a fair rating is about <b>${sug}/5</b>. Use your judgement; your rating is what counts.</div>`:""}
     <div class="field"><label>Rating</label><div class="filters" role="radiogroup" aria-label="Rating">${[1,2,3,4,5].map(n=>`<label style="display:flex;gap:5px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px"><input type="radio" name="kv-r" value="${n}" ${my?.rating===n?"checked":""}>${n} · ${["","Below expectations","Needs improvement","Meets expectations","Exceeds expectations","Outstanding"][n]}</label>`).join("")}</div></div>
     <div class="field"><label for="kv-note">Comment${lay==="self"?" (what went well, what didn't)":""}</label><textarea id="kv-note" style="min-height:70px">${esc(my?.note||"")}</textarea></div>
   </div>
@@ -2099,7 +2159,7 @@ const cycleDates=(c,m)=>{const r=cycleRange(c,m),f=x=>new Date(x+"T00:00:00").to
 const cycleText=d=>+d===1?"1st to month end":`${ordN(+d)} to ${ordN(+d-1)}`;
 const CYCLE_DAYS=[1,5,7,10,15,20,25];
 /* ===== Account cycle: every brand's month from plan to payment ===== */
-const CYCLE=[["plan","Plan","AM","by the 25th of the month before"],["design","Design","Design team","3 days before going live"],["approval","Client approval","AM & client","2 days before going live"],["posting","Posting","AM","live link the same day"],["report","Report","AM, PM, SEO","by the 3rd of next month"],["approved","Delivery approved","Operations","by the 3rd of next month"],["billed","Billed","Finance","PI by the 5th"],["paid","Paid","Client · Finance","as per payment terms"]];
+const CYCLE=[["plan","Plan","AM","by the 25th of the month before"],["design","Design","Design team","before the approval window"],["approval","Client approval","AM & client","approved before the lead time"],["posting","Posting","AM","live link the same day"],["report","Report","AM, PM, SEO","by the 3rd of next month"],["approved","Delivery approved","Operations","by the 3rd of next month"],["billed","Billed","Finance","PI by the 5th"],["paid","Paid","Client · Finance","as per payment terms"]];
 const CY_ICON={done:"✓",late:"!",prog:"●",todo:"○",na:"–"};
 let cycleLoading={};
 async function loadCycle(m){
@@ -2116,9 +2176,9 @@ function cycleOf(name,m,b){
   else{
     const planDue=addDays(cr.start,-6),planned=ps.length;
     st.plan=(tot?planned>=tot:planned>0)?{s:"done",t:tot?`${planned}/${tot} planned`:`${planned} planned`}:{s:today>planDue?"late":"prog",t:tot?`${planned}/${tot} planned`:"Not planned yet"};
-    const notReady=ps.filter(p=>["Planned","In design"].includes(p.status)),lateD=notReady.filter(p=>p.date&&p.date<=addDays(today,3));
+    const notReady=ps.filter(p=>["Planned","In design"].includes(p.status)),lateD=notReady.filter(p=>p.date&&p.date<=addDays(today,leadDays()+2));
     st.design=!ps.length?{s:"todo",t:"Nothing to design"}:!notReady.length?{s:"done",t:`${ps.length}/${ps.length} ready`}:{s:lateD.length?"late":"prog",t:`${ps.length-notReady.length}/${ps.length} ready${lateD.length?` · ${lateD.length} due soon`:""}`};
-    const waiting=ps.filter(p=>p.status==="Client approval"),okd=ps.filter(p=>["Scheduled","Published"].includes(p.status)),lateA=waiting.filter(p=>p.date&&p.date<=addDays(today,2));
+    const waiting=ps.filter(p=>p.status==="Client approval"),okd=ps.filter(p=>["Scheduled","Published"].includes(p.status)),lateA=ps.filter(p=>!["Scheduled","Published"].includes(p.status)&&p.date&&p.date<=addDays(today,leadDays()));
     st.approval=!ps.length?{s:"todo",t:"—"}:okd.length===ps.length?{s:"done",t:"All approved"}:{s:lateA.length?"late":waiting.length?"prog":"todo",t:`${okd.length}/${ps.length} approved${waiting.length?` · ${waiting.length} with client`:""}`};
     const live=ps.filter(isDelivered),miss=missingLinks(ps);
     st.posting=!ps.length?{s:"todo",t:"—"}:live.length===ps.length?{s:"done",t:`${live.length}/${ps.length} live`}:{s:miss.length?"late":started?"prog":"todo",t:`${live.length}/${ps.length} live${miss.length?` · ${miss.length} need link`:""}`};
@@ -3525,6 +3585,11 @@ async function teamChange(client,role,personName,add){
 let TZ_LIST=null;
 function tzDatalist(){if(!TZ_LIST){try{TZ_LIST=Intl.supportedValuesOf("timeZone")}catch(e){TZ_LIST=["Asia/Kolkata","Asia/Dubai","Asia/Singapore","Europe/London","Europe/Berlin","America/New_York","America/Los_Angeles","Australia/Sydney"]}}
   if(!$("#tzlist")){const d=document.createElement("datalist");d.id="tzlist";d.innerHTML=TZ_LIST.map(z=>`<option value="${z}">`).join("");document.body.appendChild(d)}}
+function leadPanel(ceo){
+  const n=leadDays();
+  return`<section class="panel"><header><h2>Planning lead time</h2><span class="muted">How many days before a post goes live the content must be client-approved. Account Managers also can't give design or video work a delivery date sooner than this.</span></header>
+  <div class="filters" style="padding:12px 16px"><div class="seg" role="group" aria-label="Lead time">${[3,5,7,10].map(v=>`<button data-leaddays="${v}" aria-pressed="${n===v}" ${ceo&&S.canWrite?"":"disabled"}>${v} days</button>`).join("")}</div><span class="muted">${n<10?"Start with 3 days in the first month, then move to 10.":"Full planning: 10 days ahead."}${ceo?"":" Only the CEO changes this."}</span></div></section>`;
+}
 function checkinPanel(ceo){
   const h=checkinHours();
   return`<section class="panel"><header><h2>Work check-ins</h2><span class="muted">Everyone except the CEO gets a short checklist pop-up to tick what they worked on. It counts in Attendance and Work discipline.</span></header>
@@ -3668,7 +3733,7 @@ function openTask(id,opts={}){
     <div class="form">
       ${full?inp("Task / deliverable","title","text","full"):""}
       ${mode?sel("Status","status",statusOpts):ro("Status",t.status)}
-      ${full||deskM?sel("Owner","owner",ownerOpts):ro("Owner",t.owner)}
+      ${(full&&!(isDesk(t)&&!canDesk()))||deskM?sel("Owner","owner",ownerOpts):ro("Owner",t.owner||(isDesk(t)?"Design desk will allocate":"—"))}
       ${full||deskM?inp("Due date","due","date"):ro("Due date",fmtD(t.due))}
       ${full||deskM?sel("Priority","priority",PRIS):ro("Priority",t.priority)}
       ${full?ta("Brief: details, copy, format","brief"):ro("Brief",t.brief,"full")}
@@ -3725,7 +3790,7 @@ function openNew(){
     <div class="field"><label for="n-dept">Department</label><select id="n-dept">${DEPTS.map(d=>`<option ${d===(isEmp?homeDept:"Design")?"selected":""}>${d}</option>`).join("")}</select></div>
     <div class="field"><label for="n-type">Type</label><select id="n-type">${TYPES.map(d=>`<option ${isEmp&&homeDept==="Production"&&d==="Shoot"?"selected":""}>${d}</option>`).join("")}</select></div>
     <div class="field"><label for="n-owner">Who does it <span class="muted" id="n-hint"></span></label><select id="n-owner"><option value="">${deskLead()?"Design desk: "+esc(first(deskLead()))+" allocates":"Unassigned"}</option>${owners.map(o=>`<option value="${esc(o)}" ${isEmp&&o===me?"selected":""}>${esc(o)}${isEmp&&o===me?" (me)":""}</option>`).join("")}</select></div>
-    <div class="field"><label for="n-due">Due date</label><input id="n-due" type="date" value="${addDays(todayISO(),isEmp?1:3)}"></div>
+    <div class="field"><label for="n-due" id="n-duelabel">Due date</label><input id="n-due" type="date" value="${addDays(todayISO(),isEmp?1:3)}"></div>
     <div class="field"><label for="n-pri">Priority</label><select id="n-pri">${PRIS.map((x,i)=>`<option ${i===1?"selected":""}>${x}</option>`).join("")}</select></div>
     <div class="field full"><label for="n-brief">Details</label><textarea id="n-brief" placeholder="${isEmp?"What you are doing and why":"Size, copy on creative, references, what good looks like"}"></textarea></div>
     <div class="field full"><label for="n-ref">Reference / Drive link</label><input id="n-ref"></div>
@@ -3738,7 +3803,10 @@ function suggestOwner(){
   const c=S.clients.find(x=>x.name===$("#n-client")?.value),d=$("#n-dept")?.value,h=$("#n-hint");if(!h)return;
   if(!c){h.textContent="";return}
   const who=c[DEPT_FIELD[d]];
-  if(DESK_DEPTS.includes(d)&&deskLead()){$("#n-owner").value="";h.textContent=who?`· usual: ${first(who)}. Leave on Design desk or pick`:"· goes to the Design desk";return}
+  const ow=$("#n-owner"),du=$("#n-due"),dl=$("#n-duelabel");
+  if(DESK_DEPTS.includes(d)&&!canDesk()){ow.value="";ow.disabled=true;h.textContent=`· ${deskLead()?first(deskLead()):"The Design desk"} allocates the designer for the week`;if(du){du.min=minDesignDue();if(!du.value||du.value<du.min)du.value=du.min}if(dl)dl.textContent=`Final delivery date (at least ${leadDays()} days ahead)`;return}
+  if(ow)ow.disabled=false;if(du)du.removeAttribute("min");if(dl)dl.textContent="Due date";
+  if(DESK_DEPTS.includes(d)&&deskLead()){ow.value="";h.textContent=who?`· usual: ${first(who)}. Leave on Design desk or pick`:"· goes to the Design desk";return}
   if(who&&person(who)){$("#n-owner").value=who;h.textContent="· mapped for this client"}else h.textContent="";
 }
 function nextId(client,dept){
@@ -3909,6 +3977,7 @@ document.addEventListener("click",async e=>{
   if(d.sopack){ackSop(d.sopack,b);return}
   if(d.sopprint){printSop(d.sopprint);return}
   if(d.wusubmit){submitWorkUpdate(b);return}
+  if(d.leaddays!==undefined){if(role()!=="ceo"||!S.canWrite)return;b.disabled=true;const {data,error}=await sb.from("app_settings").upsert({id:"lead_days",value:String(d.leaddays)}).select();b.disabled=false;if(error){toast(errMsg(error,"Couldn't save"));return}(data||[]).forEach(x=>applyRow("app_settings",x));toast(`Lead time set to ${d.leaddays} days`);render();return}
   if(d.cihours!==undefined){if(role()!=="ceo")return;const v=d.cihours;b.disabled=true;const {data,error}=await sb.from("app_settings").upsert({id:"checkin_hours",value:v}).select();b.disabled=false;if(error){toast(errMsg(error,"Couldn't save"));return}(data||[]).forEach(r=>applyRow("app_settings",r));toast(v==="0"?"Work check-ins switched off":`Work check-in every ${v==="1"?"hour":"2 hours"}`);render();return}
   if(d.setpresence){if(blockedWrite())return;const note=$("#ps-note")?.value.trim()||null;const {error}=await sb.rpc("set_presence",{p_status:d.setpresence,p_note:note});if(error){toast(errMsg(error,"Couldn't update status"));return}const me=person(S.realMe);if(me)Object.assign(me,{presence:d.setpresence,presenceNote:note,presenceAt:new Date().toISOString()});closeDrawer();render();toast("Status: "+PRESENCE[d.setpresence][0]);return}
   if(d.dostart){if(blockedWrite())return;const picks=[...document.querySelectorAll(".drawer [data-plantask]")].filter(x=>x.checked).map(x=>"• "+x.dataset.plantask);const extra=$("#sd-plan").value.trim();const plan=[...picks,extra].filter(Boolean).join("\n");if(plan.length<5){toast("Write or pick what you'll work on today");$("#sd-plan").focus();return}b.disabled=true;const {data,error}=await sb.rpc("start_day",{p_plan:plan});if(error){b.disabled=false;toast(errMsg(error,"Couldn't start your day"));return}applyRow("workdays",data);const me=person(S.realMe);if(me)Object.assign(me,{presence:"active",presenceNote:null,presenceAt:new Date().toISOString()});closeDrawer();render();toast(`Day started at ${istTimeText(data.start_at,S.realMe)}${isLate(fromRow(data))?" (late)":""}. Have a good one!`);return}
@@ -4044,7 +4113,8 @@ document.addEventListener("click",async e=>{
   if(d.create){
     const title=$("#n-title").value.trim();if(!title){$("#n-title").focus();toast("Give the task a name");return}
     if([...document.querySelectorAll(".drawer input,.drawer textarea")].some(x=>hasMedia(x.value))){openLinkBox(null,"Pictures and videos can't be saved in HQ.");return}
-    const client=$("#n-client").value,dept=$("#n-dept").value,owner=$("#n-owner").value;
+    const client=$("#n-client").value,dept=$("#n-dept").value,owner=DESK_DEPTS.includes(dept)&&!canDesk()?"":$("#n-owner").value;
+    if(DESK_DEPTS.includes(dept)&&!canDesk()&&(!$("#n-due").value||$("#n-due").value<minDesignDue())){toast(`Design and video work needs at least ${leadDays()} days. Pick ${fmtD(minDesignDue())} or later. For something urgent, ask ${deskLead()?first(deskLead()):"Operations"}.`);$("#n-due").focus();return}
     const id=nextId(client,dept);
     const c=S.clients.find(x=>x.name===client);
     const body={id,raised:todayISO(),client,am:c?.am||"",dept,type:$("#n-type").value,title,brief:$("#n-brief").value.trim(),ref:$("#n-ref").value.trim(),raisedBy:S.me,owner,due:$("#n-due").value,priority:$("#n-pri").value,status:"Requested",revision:0,
