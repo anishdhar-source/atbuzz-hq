@@ -742,7 +742,7 @@ async function startData(){
   S.canWrite=S.me===S.realMe;
   S.tab=store("abhq.tab")||null;S.authView="app";S.live=true;setSync("Live",true);
   connectLive();
-  render();loadChat();maybeNudgeDay();
+  render();loadChat();maybeNudgeDay();loadVaultAccess();
 }
 // Self-recovery: live updates reconnect on their own, and anything missed while offline is reloaded.
 let liveRetry=0,liveTimer=null,lastSync=Date.now();
@@ -781,6 +781,7 @@ function healFromError(err){
   $("#view").innerHTML=`<div class="head"><div><div class="eyebrow">At Buzz HQ</div><h1>This screen didn't load</h1><p>Your work is saved. Press reload. If it keeps happening, tell the CEO which tab you were on.</p></div><button class="btn primary" onclick="location.reload()">Reload</button></div>`;
 }
 function stopData(){
+  S.vaultKey=null;S.vaultPlain={};S.vaultLoaded=false;S.vaultItems=[];S.vaultAccess=[];S.vaultLog=[];S.vaultMeta=null;
   started=false;db=null;clearCaches();clearTimeout(liveTimer);liveRetry=0;clearInterval(portalTimer);S.isClient=false;S.portal=null;S.portalPreview=null;
   if(channel&&sb){sb.removeChannel(channel);channel=null}
   if(S.chat)Object.assign(S.chat,{rooms:[],msgs:{},open:null,draft:{},loaded:false});dayNudged=false;clearInterval(beatTimer);clearInterval(pingTimer);clearInterval(remindTimer);S.pings={};
@@ -816,7 +817,8 @@ function toast(msg){const h=$("#toastHost");h.innerHTML=`<div class="toast" role
 function tabsFor(){
   const t=tabsForBase();if(S.isClient||S.portalPreview)return t;
   t.splice(1,0,["cycle","Account cycle"]);
-  const i=t.findIndex(x=>x[0]==="how");t.splice(i<0?t.length:i,0,["schedule","Schedule"],["notes","Notes"],["sop","SOPs & policies"]);return t;
+  const i=t.findIndex(x=>x[0]==="how");t.splice(i<0?t.length:i,0,["schedule","Schedule"],["notes","Notes"],["sop","SOPs & policies"]);
+  if(canVault())t.splice(t.findIndex(x=>x[0]==="sop")+1,0,["vault","🔒 Vault"]);return t;
 }
 function tabsForBase(){
   if(S.isClient||S.portalPreview)return clientTabs();
@@ -889,7 +891,7 @@ function renderView(){
   if(!S.identityKnown||!S.live){v.innerHTML=`<div class="head"><div><div class="eyebrow">At Buzz HQ</div><h1>Loading your workspace</h1><p>Tasks, posts, clients and the team load from the shared workspace.</p></div></div>`;return}
   if(!S.team.length){v.innerHTML=`<div class="head"><div><div class="eyebrow">At Buzz HQ</div><h1>No team yet</h1><p>Add your team in Supabase first (see SETUP.md).</p></div></div>`;return}
   if(S.tab==="notes"&&S.noteEdit&&$("#nt-body")&&!S.noteRerender)return;S.noteRerender=false;
-  const fn={links:vLinks,forms:vForms,"p-onb":()=>vPForm("onboarding"),"p-off":()=>vPForm("offboarding"),bills:vBills,"p-bills":vPBills,chat:vChat,attendance:vAttendance,kra:vKra,pipeline:vPipeline,desk:vDesk,perf:vPerf,delivery:vDelivery,shoots:vShoots,myteam:vMyTeam,portal:vPortalAdmin,"p-home":vPHome,"p-work":vPWork,"p-cal":vPCal,"p-rep":vPRep,"p-fb":vPFeedback,setup:vSetup,overview:vOverview,work:vWork,clients:vClients,team:vTeam,access:vAccess,today:vToday,approvals:vApprovals,calendar:vCalendar,mine:vMine,pieces:vPieces,raised:vRaised,done:vDone,how:vHow,sop:vSop,schedule:vSchedule,notes:vNotes,cycle:vCycle}[S.tab]||vMine;
+  const fn={links:vLinks,forms:vForms,"p-onb":()=>vPForm("onboarding"),"p-off":()=>vPForm("offboarding"),bills:vBills,"p-bills":vPBills,chat:vChat,attendance:vAttendance,kra:vKra,pipeline:vPipeline,desk:vDesk,perf:vPerf,delivery:vDelivery,shoots:vShoots,myteam:vMyTeam,portal:vPortalAdmin,"p-home":vPHome,"p-work":vPWork,"p-cal":vPCal,"p-rep":vPRep,"p-fb":vPFeedback,setup:vSetup,overview:vOverview,work:vWork,clients:vClients,team:vTeam,access:vAccess,today:vToday,approvals:vApprovals,calendar:vCalendar,mine:vMine,pieces:vPieces,raised:vRaised,done:vDone,how:vHow,sop:vSop,vault:vVault,schedule:vSchedule,notes:vNotes,cycle:vCycle}[S.tab]||vMine;
   v.innerHTML=fn();
   if(S.tab==="chat")afterChatRender();
   if(S.tab==="sop")watchSopEnd();
@@ -2105,6 +2107,139 @@ async function saveMoodboard(btn,remove){
   const {data,error}=await sb.from("client_links").upsert(row).select();btn.disabled=false;
   if(error){toast(errMsg(error,"Couldn't save the moodboard"));return}
   (data||[row]).forEach(x=>applyRow("client_links",x));closeDrawer();toast("Moodboard saved");render();
+}
+/* ===== Vault: passwords and locked links (CEO, Operations, and people they grant) =====
+   Everything secret is encrypted here in the browser with the vault key (PBKDF2 → AES-GCM).
+   The database only ever sees scrambled text. The key itself is never saved anywhere. */
+const VAULT_IDLE_MIN=10,VAULT_CHECK="atbuzz-vault-ok";
+const canManageVault=()=>S.me===S.realMe&&(role()==="ceo"||(isOps(S.me)&&!isFO(S.me)));
+const canVault=()=>S.me===S.realMe&&!S.isClient&&(canManageVault()||(S.vaultAccess||[]).some(a=>a.person===S.realMe));
+const b64e=buf=>btoa(String.fromCharCode(...new Uint8Array(buf)));
+const b64d=str=>Uint8Array.from(atob(str),c=>c.charCodeAt(0));
+async function vaultDerive(pass,saltB64){
+  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pass),"PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt:b64d(saltB64),iterations:310000,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function vaultEnc(key,text){const iv=crypto.getRandomValues(new Uint8Array(12));const ct=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(text));return{iv:b64e(iv),ct:b64e(ct)}}
+async function vaultDec(key,iv,ct){const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:b64d(iv)},key,b64d(ct));return new TextDecoder().decode(pt)}
+async function loadVaultAccess(){if(!sb||S.isClient)return;const {data}=await sb.from("vault_access").select("*");S.vaultAccess=(data||[]).map(fromRow);if(S.tab==="vault"&&!S.drawer)renderView();else renderNavOnly()}
+function renderNavOnly(){try{render()}catch(e){}}
+async function loadVault(){
+  if(!sb||!canVault())return;S.vaultLoading=true;
+  const [m,it,ac,lg]=await Promise.all([sb.from("vault_meta").select("*"),sb.from("vault_items").select("*").order("title"),sb.from("vault_access").select("*"),canManageVault()?sb.from("vault_log").select("*").order("at",{ascending:false}).limit(40):Promise.resolve({data:[]})]);
+  S.vaultLoading=false;
+  if(m.error||it.error){S.vaultErr=true;if(S.tab==="vault")renderView();return}
+  S.vaultErr=false;S.vaultMeta=(m.data||[])[0]||null;S.vaultItems=(it.data||[]).map(fromRow);S.vaultAccess=(ac.data||[]).map(fromRow);S.vaultLog=(lg.data||[]).map(fromRow);S.vaultLoaded=true;
+  if(S.vaultKey)await vaultDecryptAll();
+  if(S.tab==="vault"&&!S.drawer)renderView();
+}
+async function vaultDecryptAll(){
+  const out={};for(const it of S.vaultItems||[]){try{out[it._id]=JSON.parse(await vaultDec(S.vaultKey,it.encIv,it.encCt))}catch(e){out[it._id]={_bad:true}}}S.vaultPlain=out;
+}
+function vaultLock(msg){S.vaultKey=null;S.vaultPlain={};S.vaultShow=null;if(S.drawer?.kind==="vault")closeDrawer();if(S.tab==="vault")renderView();if(msg)toast(msg)}
+async function vaultLog(action,it){try{await sb.from("vault_log").insert({person:S.realMe,item_id:it?._id||null,title:it?.title||null,action})}catch(e){}}
+setInterval(()=>{if(S.vaultKey&&Date.now()-lastInteract>VAULT_IDLE_MIN*60e3)vaultLock("Vault locked after "+VAULT_IDLE_MIN+" minutes without activity")},30e3);
+document.addEventListener("visibilitychange",()=>{if(document.hidden&&S.vaultKey)S.vaultHiddenAt=Date.now();else if(S.vaultKey&&S.vaultHiddenAt&&Date.now()-S.vaultHiddenAt>VAULT_IDLE_MIN*60e3)vaultLock("Vault locked")});
+function genPassword(n=18){const cs="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?-_";const r=crypto.getRandomValues(new Uint32Array(n));return[...r].map(x=>cs[x%cs.length]).join("")}
+function vVault(){
+  const head=`<div class="head"><div><div class="eyebrow">🔒 Locked · CEO, Operations and people they allow</div><h1>Vault</h1><p>Passwords and locked links (Drive folders, sheets, logins) in one safe place. Everything is scrambled with the vault key before it's saved, so only people who know the key can read it.</p></div>
+  <div class="filters">${S.vaultKey?`<button class="btn" data-vlock="1">🔒 Lock now</button><button class="btn primary" data-vadd="1">Add entry</button>`:""}</div></div>`;
+  if(!S.vaultLoaded&&!S.vaultLoading){loadVault();return head+`<div class="empty">Opening the vault…</div>`}
+  if(S.vaultErr)return head+`<div class="empty">The vault isn't set up yet (database step 29), or you don't have access.</div>`;
+  if(!S.vaultLoaded)return head+`<div class="empty">Opening the vault…</div>`;
+  const mg=canManageVault();
+  if(!S.vaultMeta){
+    if(!mg)return head+`<div class="empty">The vault hasn't been set up yet. The CEO or Operations sets the vault key first.</div>`;
+    return head+`<section class="panel" style="max-width:640px"><header><h2>Set the vault key</h2></header><div class="body"><form id="vaultSetup" class="form" novalidate>
+      <div class="notice warn" style="grid-column:1/-1"><b>Choose it carefully, it can't be changed or recovered.</b> Use at least 12 characters (a short sentence works well). Share it only in person or by phone with people you give access to, never in chat or email. If it's forgotten, saved entries can't be opened.</div>
+      <div class="field full"><label for="vs-1">Vault key</label><input id="vs-1" type="password" autocomplete="new-password" minlength="12"></div>
+      <div class="field full"><label for="vs-2">Type it again</label><input id="vs-2" type="password" autocomplete="new-password"></div>
+      <label class="field full" style="flex-direction:row;gap:8px;align-items:center"><input type="checkbox" id="vs-ok"> I've written the key down somewhere safe, outside HQ.</label>
+      <div class="field full"><button class="btn primary" type="submit">Set the vault key</button></div></form></div></section>`;
+  }
+  if(!S.vaultKey)return head+`<section class="panel" style="max-width:520px"><header><h2>Unlock the vault</h2></header><div class="body"><form id="vaultUnlock" class="form" novalidate>
+      <div class="field full"><label for="vk-pass">Vault key</label><input id="vk-pass" type="password" autocomplete="off" autofocus></div>
+      <div class="field full"><button class="btn primary" type="submit">Unlock</button></div>
+      <p class="muted" style="grid-column:1/-1;font-size:12.5px;margin:0">Ask the CEO for the key. It locks again after ${VAULT_IDLE_MIN} minutes without activity, and when you sign out.</p></form></div></section>${mg?vaultAccessPanel():""}`;
+  const f=S.vaultF||{kind:"",q:"",client:""},q=(f.q||"").toLowerCase();
+  const items=(S.vaultItems||[]).filter(it=>(!f.kind||it.kind===f.kind)&&(!f.client||(it.client||"")===f.client)&&(!q||[it.title,it.client,S.vaultPlain[it._id]?.username,S.vaultPlain[it._id]?.url].join(" ").toLowerCase().includes(q)));
+  const brands=[...new Set((S.vaultItems||[]).map(i=>i.client).filter(Boolean))].sort();
+  const row=it=>{const d=S.vaultPlain[it._id]||{},shown=S.vaultShow===it._id;
+    if(d._bad)return`<tr><td><b>${esc(it.title)}</b></td><td colspan="4" class="muted">Can't be opened with this key.</td><td></td></tr>`;
+    return`<tr><td style="min-width:160px"><b style="font-weight:600">${esc(it.title)}</b>${it.client?`<div class="muted" style="font-size:12px">${esc(it.client)}</div>`:""}</td><td><span class="tag">${it.kind==="link"?"Locked link":"Password"}</span></td>
+    <td style="min-width:150px">${d.username?`<span class="mono">${esc(d.username)}</span> <button class="btn sm ghost" data-vcopy="${esc(it._id)}|username" aria-label="Copy username">Copy</button>`:`<span class="muted">—</span>`}</td>
+    <td style="min-width:190px">${d.password?`<span class="mono">${shown?esc(d.password):"••••••••••"}</span> <button class="btn sm ghost" data-vshow="${esc(it._id)}">${shown?"Hide":"Show"}</button><button class="btn sm ghost" data-vcopy="${esc(it._id)}|password">Copy</button>`:`<span class="muted">—</span>`}</td>
+    <td>${d.url?`<a class="btn sm" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer" data-vopen="${esc(it._id)}">Open ↗</a>`:""}</td>
+    <td style="white-space:nowrap"><button class="btn sm" data-vedit="${esc(it._id)}">Edit</button></td></tr>`};
+  return head+`<div class="filters" style="margin-bottom:10px"><div class="seg" role="group" aria-label="Type">${[["","All"],["password","Passwords"],["link","Locked links"]].map(([k,l])=>`<button data-vkind="${k}" aria-pressed="${(f.kind||"")===k}">${l}</button>`).join("")}</div>
+    <input id="v-q" type="search" placeholder="Search name, brand, username or link" value="${esc(f.q||"")}" aria-label="Search the vault" style="min-width:220px">
+    ${brands.length?`<select id="v-client" aria-label="Brand"><option value="">All brands</option>${brands.map(b=>`<option ${b===f.client?"selected":""}>${esc(b)}</option>`).join("")}</select>`:""}</div>
+  <section class="panel vault-list"><header><h2>${items.length} entr${items.length===1?"y":"ies"}</h2><span class="muted">Shown passwords hide again after 20 seconds. Copied text is cleared from the clipboard after 30 seconds.</span></header>
+  ${items.length?`<div class="scroll"><table><thead><tr><th>Name</th><th>Type</th><th>Username / email</th><th>Password</th><th>Link</th><th></th></tr></thead><tbody>${items.map(row).join("")}</tbody></table></div>`:`<div class="empty">${(S.vaultItems||[]).length?"Nothing matches.":"Nothing saved yet. Press Add entry for a password or a locked Drive link."}</div>`}</section>
+  ${mg?vaultAccessPanel()+vaultLogPanel():""}`;
+}
+function vaultAccessPanel(){
+  const can=S.canWrite&&canManageVault(),granted=(S.vaultAccess||[]);
+  const auto=S.team.filter(p=>p.active!==false&&(p.role==="ceo"||(p.role==="ops"&&p.dept==="Operations"))).map(p=>p.name);
+  const avail=S.team.filter(p=>p.active!==false&&p.role!=="client"&&!auto.includes(p.name)&&!granted.some(g=>g.person===p.name)).sort((a,b)=>a.name.localeCompare(b.name));
+  return`<section class="panel"><header><h2>Who can open the vault</h2><span class="muted">They still need the vault key from you</span></header><div class="body">
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">${auto.map(n=>`<span class="chip ok">${esc(n)} · always</span>`).join("")}${granted.map(g=>`<span class="chip">${esc(g.person)}${can?` <button class="linkbtn" data-vrevoke="${esc(g.person)}" aria-label="Remove ${esc(g.person)}">✕</button>`:""}</span>`).join("")}</div>
+  ${can?`<div class="filters"><select id="v-grant" aria-label="Give access to"><option value="">Give access to…</option>${avail.map(p=>`<option>${esc(p.name)}</option>`).join("")}</select><button class="btn sm primary" data-vgrant="1">Give access</button></div>`:""}</div></section>`;
+}
+function vaultLogPanel(){
+  const lg=S.vaultLog||[];
+  return`<section class="panel"><header><h2>Activity</h2><span class="muted">Last ${lg.length} actions · only the CEO and Operations see this</span></header>${lg.length?`<div class="scroll"><table><thead><tr><th>When</th><th>Who</th><th>Did</th><th>Entry</th></tr></thead><tbody>${lg.map(l=>`<tr><td class="muted" style="white-space:nowrap">${esc(ago(l.at))}</td><td>${esc(l.person)}</td><td>${esc(l.action)}</td><td>${esc(l.title||"")}</td></tr>`).join("")}</tbody></table></div>`:`<div class="empty">No activity yet.</div>`}</section>`;
+}
+function openVaultItem(id){
+  const it=id?(S.vaultItems||[]).find(x=>x._id===id):null,d=it?(S.vaultPlain[it._id]||{}):{},kind=it?.kind||"password";
+  S.drawer={kind:"vault",id:id||null};
+  const clients=S.clients.map(c=>c.name).sort();
+  $("#drawerHost").innerHTML=`<div class="scrim" data-close="1"></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dvt" style="width:min(560px,100%)">
+  <header><div><div class="eyebrow">Vault · encrypted before saving</div><h2 id="dvt" style="margin-top:4px">${it?esc(it.title):"New entry"}</h2></div><button class="btn ghost" data-close="1" aria-label="Close">✕</button></header>
+  <div class="content"><div class="form">
+    <div class="field"><label for="ve-kind">Type</label><select id="ve-kind"><option value="password" ${kind==="password"?"selected":""}>Password / login</option><option value="link" ${kind==="link"?"selected":""}>Locked link (Drive, sheet…)</option></select></div>
+    <div class="field"><label for="ve-client">Brand (optional)</label><select id="ve-client"><option value="">— Company —</option>${clients.map(c=>`<option ${c===it?.client?"selected":""}>${esc(c)}</option>`).join("")}</select></div>
+    <div class="field full"><label for="ve-title">Name</label><input id="ve-title" maxlength="120" value="${esc(it?.title||"")}" placeholder="e.g. Godfrey Instagram, Defence Bakery Drive (locked)"></div>
+    <div class="field full"><label for="ve-url">Link</label><input id="ve-url" type="url" value="${esc(d.url||"")}" placeholder="https://…"></div>
+    <div class="field"><label for="ve-user">Username / email</label><input id="ve-user" autocomplete="off" value="${esc(d.username||"")}"></div>
+    <div class="field"><label for="ve-pass">Password</label><div style="display:flex;gap:6px"><input id="ve-pass" type="password" autocomplete="new-password" value="${esc(d.password||"")}" style="flex:1"><button class="btn sm" data-vgen="1" type="button">Generate</button><button class="btn sm ghost" data-vpeek="1" type="button">Show</button></div></div>
+    <div class="field full"><label for="ve-notes">Notes (2FA phone, recovery codes, who owns it)</label><textarea id="ve-notes" style="min-height:70px">${esc(d.notes||"")}</textarea></div>
+  </div><p class="muted" style="font-size:12px">Links only. Pictures and files can't be saved here.</p></div>
+  <footer>${it&&canManageVault()?`<button class="btn" data-vdel="${esc(it._id)}" style="margin-right:auto;color:var(--bad)">Delete</button>`:""}<button class="btn" data-close="1">Cancel</button><button class="btn primary" data-vsave="${esc(id||"")}">Save</button></footer></aside>`;
+  $("#ve-title").focus();
+}
+async function saveVaultItem(id,btn){
+  if(!S.vaultKey){vaultLock();return}
+  const title=$("#ve-title").value.trim();if(!title){toast("Give the entry a name");$("#ve-title").focus();return}
+  const url=$("#ve-url").value.trim();if(url&&!/^https?:\/\/\S+\.\S+/i.test(url)){toast("Paste the full link, starting with https://");$("#ve-url").focus();return}
+  const data={url,username:$("#ve-user").value.trim(),password:$("#ve-pass").value,notes:$("#ve-notes").value.trim()};
+  if([data.url,data.notes].some(hasMedia)){toast("Pictures and files can't be saved. Use a link.");return}
+  const kind=$("#ve-kind").value,client=$("#ve-client").value||null;
+  if(kind==="password"&&!data.password&&!data.username){toast("Add the username or password");return}
+  if(kind==="link"&&!data.url){toast("Add the link");$("#ve-url").focus();return}
+  btn.disabled=true;
+  const e=await vaultEnc(S.vaultKey,JSON.stringify(data));
+  const row={kind,title,client,enc_iv:e.iv,enc_ct:e.ct};
+  const res=id?await sb.from("vault_items").update(row).eq("id",id).select():await sb.from("vault_items").insert(row).select();
+  btn.disabled=false;
+  if(res.error||!res.data?.length){toast(errMsg(res.error,"Couldn't save to the vault"));return}
+  const saved=fromRow(res.data[0]);S.vaultItems=[...(S.vaultItems||[]).filter(x=>x._id!==saved._id),saved].sort((a,b)=>a.title.localeCompare(b.title));S.vaultPlain[saved._id]=data;
+  vaultLog(id?"edited":"created",saved);closeDrawer();toast(id?"Saved":"Added to the vault");renderView();
+}
+async function vaultForm(f){
+  const btn=f.querySelector("button[type=submit]");
+  if(f.id==="vaultSetup"){
+    const a=$("#vs-1").value,b2=$("#vs-2").value;
+    if(a.length<12){toast("Use at least 12 characters");return}if(a!==b2){toast("The two keys don't match");return}if(!$("#vs-ok").checked){toast("Write the key down safely first, then tick the box");return}
+    btn.disabled=true;const salt=b64e(crypto.getRandomValues(new Uint8Array(16)));const key=await vaultDerive(a,salt);const c=await vaultEnc(key,VAULT_CHECK);
+    const {error}=await sb.from("vault_meta").insert({salt,check_iv:c.iv,check_ct:c.ct});btn.disabled=false;
+    if(error){toast(errMsg(error,"Couldn't set the vault key"));return}
+    S.vaultKey=key;vaultLog("key set");toast("Vault key set. The vault is open.");await loadVault();return;
+  }
+  const pass=$("#vk-pass").value;if(!pass){toast("Enter the vault key");return}
+  btn.disabled=true;btn.textContent="Unlocking…";
+  try{const key=await vaultDerive(pass,S.vaultMeta.salt);const ok=await vaultDec(key,S.vaultMeta.check_iv,S.vaultMeta.check_ct);if(ok!==VAULT_CHECK)throw 0;S.vaultKey=key;await vaultDecryptAll();toast("Vault open");renderView()}
+  catch(e){btn.disabled=false;btn.textContent="Unlock";toast("That vault key isn't right");$("#vk-pass").select()}
 }
 /* ===== Client notes & feedback ===== */
 const fbOpen=()=>(S.feedback||[]).filter(f=>f.status==="Open");
@@ -3848,6 +3983,7 @@ function accessMatrixHTML(){
     ["Logins & access levels","All","Logins only","Logins only",N,N,N,N,N],
     ["Schedule, calls, chat",Y,Y,Y,Y,Y,Y,Y,N],
     ["Notes","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared",N],
+    ["🔒 Vault (passwords, locked links)","Open + give access","Open + give access",N,"Only if given access","Only if given access","Only if given access","Only if given access",N],
     ["View the app as someone",Y,N,N,N,N,N,N,N]];
   return`<div class="scroll"><table class="va-matrix"><thead><tr><th>What</th>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr><td><b style="font-weight:600">${r[0]}</b></td>${r.slice(1).map(v=>`<td class="${v===N?"va-no":v===Y?"va-yes":""}">${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
   <p class="muted" style="font-size:12px;margin:8px 0 0">Operations = Vineet and Priyanka. Founder's Office = Sehej. Brands never see other brands, and only see sections you switch on in Client portal. Each person's private notes stay private, even in "View as".</p>`;
@@ -3885,6 +4021,18 @@ document.addEventListener("click",async e=>{
   if(d.whoami){if(S.me!==S.realMe){setMe(S.realMe);S.tab="access";render()}else openAccount();return}
   if(d.endpreview){if(S.portalPreview){S.portalPreview=null;S.portal=null;clearInterval(portalTimer)}closeDrawer();setMe(S.realMe);S.tab=null;render();return}
   if(d.viewas){openViewAs();return}
+  if(d.vlock){vaultLock("Vault locked");return}
+  if(d.vadd){openVaultItem(null);return}
+  if(d.vedit){openVaultItem(d.vedit);return}
+  if(d.vsave!==undefined){saveVaultItem(d.vsave||null,b);return}
+  if(d.vgen){const x=$("#ve-pass");x.value=genPassword();x.type="text";return}
+  if(d.vpeek){const x=$("#ve-pass");x.type=x.type==="password"?"text":"password";b.textContent=x.type==="password"?"Show":"Hide";return}
+  if(d.vkind!==undefined){S.vaultF={...(S.vaultF||{}),kind:d.vkind};renderView();return}
+  if(d.vshow){const it=S.vaultItems.find(x=>x._id===d.vshow);if(S.vaultShow===d.vshow){S.vaultShow=null}else{S.vaultShow=d.vshow;vaultLog("viewed",it);clearTimeout(S.vaultShowT);S.vaultShowT=setTimeout(()=>{if(S.vaultShow===d.vshow){S.vaultShow=null;if(S.tab==="vault"&&!S.drawer)renderView()}},20e3)}renderView();return}
+  if(d.vcopy){const[id,f]=d.vcopy.split("|"),it=S.vaultItems.find(x=>x._id===id),v=S.vaultPlain[id]?.[f]||"";try{await navigator.clipboard.writeText(v);vaultLog("copied",it);toast((f==="password"?"Password":"Username")+" copied. Clipboard clears in 30 seconds.");setTimeout(()=>{if(document.hasFocus())navigator.clipboard.writeText("").catch(()=>{})},30e3)}catch(_){toast("Couldn't copy. Press Show and copy it by hand.")}return}
+  if(d.vdel){if(!canManageVault())return;const it=S.vaultItems.find(x=>x._id===d.vdel);if(!confirm(`Delete "${it?.title}" from the vault? This can't be undone.`))return;b.disabled=true;const {error}=await sb.from("vault_items").delete().eq("id",d.vdel);b.disabled=false;if(error){toast(errMsg(error,"Couldn't delete"));return}vaultLog("deleted",it);S.vaultItems=S.vaultItems.filter(x=>x._id!==d.vdel);closeDrawer();toast("Deleted");renderView();return}
+  if(d.vgrant){const n=$("#v-grant").value;if(!n){toast("Pick a person");return}b.disabled=true;const {data,error}=await sb.from("vault_access").insert({person:n,granted_by:S.realMe}).select();b.disabled=false;if(error){toast(errMsg(error,"Couldn't give access"));return}S.vaultAccess=[...(S.vaultAccess||[]),...(data||[]).map(fromRow)];vaultLog("granted",{title:n});toast(`${n} can open the vault now. Tell them the key in person.`);renderView();return}
+  if(d.vrevoke){if(!confirm(`Remove ${d.vrevoke}'s access to the vault?`))return;const {error}=await sb.from("vault_access").delete().eq("person",d.vrevoke);if(error){toast(errMsg(error,"Couldn't remove"));return}S.vaultAccess=(S.vaultAccess||[]).filter(x=>x.person!==d.vrevoke);vaultLog("removed",{title:d.vrevoke});toast(`${d.vrevoke} can no longer open the vault`);renderView();return}
   if(d.vaperson){if(S.portalPreview){S.portalPreview=null;S.portal=null;clearInterval(portalTimer)}closeDrawer();setMe(d.vaperson);toast("Viewing as "+d.vaperson);return}
   if(d.authview){S.authView=d.authview;render();return}
   if(d.signout){closeDrawer();store("abhq.preview",null);await sb.auth.signOut();S.authView="login";render();return}
@@ -4133,7 +4281,7 @@ document.addEventListener("input",e=>{const t=e.target;if(t.id==="nt-body"||t.id
 document.addEventListener("change",e=>{const t=e.target;if(t.dataset?.eprefall){const k=$(".ep-kinds");if(k)k.hidden=!t.checked;return}if(t.id==="cy-month"){S.cycleMonth=t.value;S.cycleStage="";render();return}if(["ap-client","ap-platform","ap-date"].includes(t.id)){apSuggest(true);return}if(t.id==="ap-time"){t.dataset.auto="0";apSuggest(false);return}if(t.id==="nt-lang"){noteLang=t.value;if(noteRec){const r=noteRec;noteRec=null;r._keep=false;try{r.stop()}catch(_){}startRec()}return}if(t.dataset?.notechk!==undefined){toggleNoteCheck(+t.dataset.notechk,t);return}if(t.id==="nt-brand"){S.noteBrand=t.value;S.noteSel=null;S.noteRerender=true;render()}});
 document.addEventListener("keydown",e=>{if(e.key==="Enter"&&e.target.dataset?.slotin){e.preventDefault();document.querySelector(`[data-slotadd="${CSS.escape(e.target.dataset.slotin)}"]`)?.click();return}if(e.target.id==="nt-body"&&(e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="b"){e.preventDefault();noteTool("b")}if(e.target.id==="nt-body"&&e.key==="Enter"&&!e.shiftKey){const ta=e.target,a=ta.selectionStart,v=ta.value,ls=v.lastIndexOf("\n",a-1)+1,line=v.slice(ls,a),m=line.match(/^(\s*(?:[-*]\s+\[[ xX]\]\s+|[-*]\s+|\d+[.)]\s+))/);if(m&&a===ta.selectionEnd){e.preventDefault();if(line.trim()===m[1].trim()){ta.value=v.slice(0,ls)+v.slice(a);ta.setSelectionRange(ls,ls)}else{let pre=m[1].replace(/\[[xX]\]/,"[ ]");const num=pre.match(/^(\s*)(\d+)([.)]\s+)$/);if(num)pre=num[1]+(+num[2]+1)+num[3];ta.value=v.slice(0,a)+"\n"+pre+v.slice(a);ta.setSelectionRange(a+1+pre.length,a+1+pre.length)}noteDirty()}}});
 window.addEventListener("beforeunload",e=>{if(S.noteEdit&&$("#nt-save")?.textContent!=="Saved ✓"){saveNote();e.preventDefault();e.returnValue=""}});
-document.addEventListener("input",e=>{if(e.target.id==="cy-q"){S.cycleQ=e.target.value;const pos=e.target.selectionStart;renderView();const n=$("#cy-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}if(e.target.id==="sch-q"){S.schedQ=e.target.value;const pos=e.target.selectionStart;renderView();const n=$("#sch-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}}});
+document.addEventListener("input",e=>{if(e.target.id==="v-q"){S.vaultF={...(S.vaultF||{}),q:e.target.value};const pos=e.target.selectionStart;renderView();const n=$("#v-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}if(e.target.id==="cy-q"){S.cycleQ=e.target.value;const pos=e.target.selectionStart;renderView();const n=$("#cy-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return}if(e.target.id==="sch-q"){S.schedQ=e.target.value;const pos=e.target.selectionStart;renderView();const n=$("#sch-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}}});
 document.addEventListener("change",e=>{if(e.target.id==="sop-dept"){S.sopDept=e.target.value;S.sopSel=null;render()}});
 document.addEventListener("input",e=>{if(e.target.id==="sop-q"){S.sopQ=e.target.value;const pos=e.target.selectionStart;render();const n=$("#sop-q");if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}}});
 document.addEventListener("change",async e=>{
@@ -4166,6 +4314,7 @@ document.addEventListener("change",async e=>{
   if(el.id==="f-follow"){S.follow=el.value;render();return}
   if(el.id==="f-mapclient"){S.mapClient=el.value;render();return}
   if(el.id==="previewAs"&&el.value){setMe(el.value);return}
+  if(el.id==="v-client"){S.vaultF={...(S.vaultF||{}),client:el.value};renderView();return}
   if(el.id==="n-client"||el.id==="n-dept"){if(role()!=="employee")suggestOwner();return}
   if(el.dataset.pf){await updateClient(el.dataset.cname,{[el.dataset.pf]:el.checked});return}
   if(el.dataset.ofield){const f=el.dataset.ofield,v=el.type==="checkbox"?el.checked:f==="grace_min"?+el.value:el.value.trim();await saveOfficeField(el.dataset.oname,f,v);return}
@@ -4551,6 +4700,7 @@ async function sendInvite(email,btn){
   }catch(e){btn.disabled=false;toast("Invites aren't switched on yet. Invite them from Supabase → Authentication → Users (see SETUP.md).")}
 }
 document.addEventListener("submit",async e=>{
+  if(e.target.id==="vaultSetup"||e.target.id==="vaultUnlock"){e.preventDefault();return vaultForm(e.target)}
   const f=e.target;e.preventDefault();
   const btn=f.querySelector("button[type=submit]");
   const go=async fn=>{btn.disabled=true;try{await fn()}finally{btn.disabled=false}};
