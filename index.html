@@ -344,6 +344,8 @@ body{margin:0;min-height:100vh;padding-bottom:env(safe-area-inset-bottom,0px)}
 .cy-legend .cy-k{font-style:normal;font-weight:800;display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;margin-right:4px;font-size:11px}
 .cy-k.done{background:color-mix(in srgb,var(--ok) 15%,var(--surface));color:var(--ok)}.cy-k.prog{background:color-mix(in srgb,#e0a106 18%,var(--surface));color:#b07d00}.cy-k.late{background:color-mix(in srgb,var(--bad) 15%,var(--surface));color:var(--bad)}.cy-k.todo{border:1px dashed var(--line);color:var(--muted)}.cy-k.na{color:var(--muted)}
 .cy-stages .cy-late-btn:not([aria-pressed="true"]){border-color:var(--bad);color:var(--bad)}
+.va-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 10px;margin:0 0 6px;cursor:pointer;font:inherit;color:inherit}.va-row:hover,.va-row:focus-visible{border-color:var(--green);background:var(--green-soft)}.va-row .avatar{flex:none}.va-txt{display:flex;flex-direction:column;flex:1;min-width:0}.va-txt small{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.va-row[hidden],.va-group[hidden]{display:none}
+.va-matrix th,.va-matrix td{font-size:12.5px;white-space:nowrap}.va-matrix td.va-yes{color:var(--green);font-weight:700}.va-matrix td.va-no{color:var(--muted)}.va-who summary{cursor:pointer;padding:8px 0}
 .mb-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}.mb-ic{font-size:24px}.mb-txt{display:flex;flex-direction:column;flex:1;min-width:200px}.mb-txt small{color:var(--muted);font-size:12.5px}.mb-acts{display:flex;gap:6px;flex-wrap:wrap}
 .mb-inpost{display:flex;flex-direction:column;gap:3px;background:var(--green-soft);border-radius:10px;padding:10px 12px}.mb-inpost a{font-weight:600}
 .fb-row{grid-template-columns:minmax(0,1fr) auto!important}.fb-reply{display:block;margin-top:6px;padding:8px 10px;border-radius:8px;background:var(--green-soft);color:var(--ink)}
@@ -476,6 +478,7 @@ button.tl-lab:hover{background:var(--sunk)}
       <div id="dayBox"></div>
       <button class="bell" id="bellBtn" data-bell="1" hidden aria-label="Notifications"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg><span id="bellCount" hidden></span></button>
       <button class="me" id="meBtn" data-whoami="1" hidden><span class="avatar" id="meAv"></span><span class="nm" id="meNm"></span></button>
+      <button class="btn sm" id="viewAsBtn" data-viewas="1" hidden aria-label="View the app as someone else">👁 View as</button>
       <button class="btn sm" id="signoutBtn" data-signout="1" hidden>Sign out</button>
     </div>
     <nav class="tabs" id="nav" aria-label="Sections"></nav>
@@ -871,8 +874,9 @@ function renderChrome(){
   const prev=S.isOwner&&S.me&&S.me!==S.realMe;
   const pp=!!S.portalPreview;
   $("#previewBar").hidden=!(prev||pp);
-  if(pp)$("#previewBar .wrap").innerHTML=`<span>Previewing ${esc(S.portalPreview)}'s client portal, exactly as their contacts see it. Buttons are switched off in preview.</span><button data-endpportal="1">Back to Client portal</button>`;
-  else if(prev)$("#previewBar .wrap").innerHTML=`<span>Previewing as ${esc(S.me)}, ${role()==="manager"?"Account Manager":"Employee"} view. This is exactly what they see.</span><button data-endpreview="1">Back to my CEO view</button>`;
+  if(pp)$("#previewBar .wrap").innerHTML=`<span>👁 Viewing <b>${esc(S.portalPreview)}</b>'s brand portal, as their contacts see it. Buttons are switched off in preview.</span><span style="display:flex;gap:6px;flex-wrap:wrap">${S.isOwner?`<button data-viewas="1">Switch person</button><button data-endpportal="ceo">Back to my CEO view</button>`:`<button data-endpportal="1">Back to Client portal</button>`}</span>`;
+  else if(prev)$("#previewBar .wrap").innerHTML=`<span>👁 Viewing as <b>${esc(S.me)}</b> · ${esc(viewAsLabel(person(S.me)))}. These are their screens and tabs. Nothing can be changed in this view.</span><span style="display:flex;gap:6px;flex-wrap:wrap"><button data-viewas="1">Switch person</button><button data-endpreview="1">Back to my CEO view</button></span>`;
+  {const vb=$("#viewAsBtn");if(vb)vb.hidden=!(S.isOwner&&S.authView==="app"&&!S.isClient&&!!S.me)}
   if(S.authView!=="app"||!S.me||!S.team.length){$("#nav").innerHTML="";return}
   const tabs=tabsFor();
   if(!tabs.find(t=>t[0]===S.tab))S.tab=tabs[0][0];
@@ -1208,16 +1212,7 @@ function vAccess(){
   const canEdit=p=>S.canWrite&&p.name!==S.realMe&&(ceo||!["ceo","ops","client"].includes(p.role));
   const dis=p=>canEdit(p)?"":"disabled";
   const pSel=(p,field,opts,key)=>{const cur=p[key||field]||"";const all=opts.includes(cur)?opts:[cur,...opts];return`<select data-pfield="${field}" data-pid="${esc(p._id)}" aria-label="${field} for ${esc(p.name)}" ${dis(p)}>${all.map(o=>`<option value="${esc(o)}" ${o===cur?"selected":""}>${esc(o||"—")}</option>`).join("")}</select>`};
-  const perms=[
-    ["See tasks","Everyone's","Everyone's","Everyone's (works on own clients and team)","Own, self-added, and their clients'"],
-    ["Add own tasks and keep them updated","✓","✓","✓","✓"],
-    ["Assign tasks to other people","✓","✓","✓","✓ hand-offs, e.g. SEO → Website"],
-    ["Change brief, owner, due date","✓","✓","Their clients and team","Only tasks they added"],
-    ["Approve, send to client, mark Done","✓","✓","Their clients and team","Only tasks they added themselves"],
-    ["Monthly client reports","All, edit all","All, edit all, start a month","Their clients, social part","PM / SEO: their clients, own part"],
-    ["Manage clients","✓","✓","—","—"],
-    ["Add people, change access levels","✓","—","—","—"]];
-  const ppl=deliveryTeam().slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const ppl=S.team.filter(p=>p.role!=="client"&&p.active!==false&&p.name!==S.realMe).sort((a,b)=>a.name.localeCompare(b.name));
   const order={ceo:0,ops:1,manager:2,hr:3,finance:3,employee:4};
   const roleSel=p=>`<select data-role-for="${esc(p._id)}" aria-label="Access level for ${esc(p.name)}" ${ceo&&S.canWrite&&p.name!==S.realMe?"":"disabled"}>${Object.entries(ROLE_LABEL).filter(([k])=>k!=="client").map(([k,l])=>`<option value="${k}" ${p.role===k?"selected":""}>${l}</option>`).join("")}</select>`;
   const noEmail=S.team.filter(p=>!p.email&&p.active!==false&&!NON_DELIVERY.includes(p.dept)).length;
@@ -1241,8 +1236,8 @@ function vAccess(){
     <div class="field" style="justify-content:flex-end"><button class="btn primary" type="submit">Add person</button></div>
   </form></div></section>
   ${ceo?`<section class="panel"><header><h2>Backups</h2><span class="muted">Free plan has no automatic backups</span></header><div class="body" style="display:flex;flex-direction:column;gap:10px"><p class="muted" style="margin:0">Download a copy of everything once a week and keep it in Google Drive. Each file opens in Excel and can be loaded back into Supabase (Table Editor → Import data from CSV).</p><div class="filters">${["tasks","reports","posts","people","clients"].map(t=>`<button class="btn" data-backup="${t}">Download ${t}</button>`).join("")}<button class="btn primary" data-backup="all">Download all 5</button></div></div></section>`:""}
-  ${ceo?`<section class="panel"><header><h2>Preview the app as someone</h2><span class="muted">Read-only, only you can do this</span></header><div class="body filters"><label for="previewAs">See exactly what this person sees</label><select id="previewAs"><option value="">Choose a person…</option>${ppl.map(p=>`<option value="${esc(p.name)}">${esc(p.name)} · ${ROLE_LABEL[p.role]||""}</option>`).join("")}</select></div></section>`:""}
-  <section class="panel"><header><h2>What each access level can do</h2></header><div class="scroll"><table><thead><tr><th>Permission</th><th>CEO · Admin</th><th>Operations</th><th>Account Manager</th><th>Employee</th></tr></thead><tbody>${perms.map(p=>`<tr><td>${p[0]}</td><td>${p[1]}</td><td>${p[2]}</td><td>${p[3]}</td><td>${p[4]}</td></tr>`).join("")}</tbody></table></div></section>`;
+  ${ceo?`<section class="panel"><header><h2>Preview the app as someone</h2><span class="muted">Read-only, only you can do this</span></header><div class="body filters"><button class="btn sm primary" data-viewas="1">Open "View as"</button><label for="previewAs">or pick here</label><select id="previewAs"><option value="">Choose a person…</option>${ppl.map(p=>`<option value="${esc(p.name)}">${esc(p.name)} · ${ROLE_LABEL[p.role]||""}</option>`).join("")}</select></div></section>`:""}
+  <section class="panel"><header><h2>Who can see what</h2><span class="muted">All access levels</span></header><div class="body">${accessMatrixHTML()}</div></section>`;
 }
 
 function vSetup(){
@@ -2147,22 +2142,24 @@ function cycleOf(name,m,b){
 function vCycle(){
   const today=todayISO(),cm=today.slice(0,7),months=[addDays(cm+"-01",-40).slice(0,7),addDays(cm+"-01",-1).slice(0,7),cm];
   const m=months.includes(S.cycleMonth)?S.cycleMonth:cm,cache=S.cycle?.[m];
+  // billing stages only for people who may see bills (CEO, Finance, Operations)
+  const bill=canSeeBills(),STG=bill?CYCLE:CYCLE.slice(0,6),stgKeys=STG.map(x=>x[0]);
   if(!cache||Date.now()-cache.at>60e3)loadCycle(m);
-  const head=`<div class="head"><div><div class="eyebrow">From plan to payment</div><h1>Account cycle</h1><p>Every brand's billing cycle (1st–30th, 10th–9th… as per its MOU), stage by stage, up to the final bill. It updates itself from the calendar, reports, Delivery check and Bills. Everyone sees the brands they work on.</p></div>
+  const head=`<div class="head"><div><div class="eyebrow">From plan to payment</div><h1>Account cycle</h1><p>Every brand's billing cycle (1st–30th, 10th–9th… as per its MOU), stage by stage, ${bill?"up to the final bill. It updates itself from the calendar, reports, Delivery check and Bills.":"up to Operations approving the delivery. It updates itself from the calendar, reports and Delivery check."} Everyone sees the brands they work on.</p></div>
   <div class="filters"><label for="cy-month" class="muted">Cycle starting in</label><select id="cy-month">${months.map(x=>`<option value="${x}" ${x===m?"selected":""}>${monthName(x)}</option>`).join("")}</select></div></div>`;
   if(!cache)return head+`<div class="empty">Loading the cycle…</div>`;
   if(cache.err||!cache.rows)return head+`<div class="empty">The account cycle isn't set up yet (database step 24).</div>`;
   const q=(S.cycleQ||"").toLowerCase();
-  let rows=cache.rows.filter(b=>{const c=S.clients.find(x=>x.name===b.client);return c&&(c.status||"Active")!=="Inactive"}).map(b=>{const c=S.clients.find(x=>x.name===b.client);return{b,c,...cycleOf(b.client,m,b)}});
+  let rows=cache.rows.filter(b=>{const c=S.clients.find(x=>x.name===b.client);return c&&(c.status||"Active")!=="Inactive"}).map(b=>{const c=S.clients.find(x=>x.name===b.client),r={b,c,...cycleOf(b.client,m,b)};r.late=r.late.filter(k=>stgKeys.includes(k));if(!bill&&["billed","paid","complete"].includes(r.cur))r.cur="delivered";return r});
   const counts={};rows.forEach(r=>counts[r.cur]=(counts[r.cur]||0)+1);
   const lateN=rows.filter(r=>r.late.length).length;
   if(S.cycleStage==="late")rows=rows.filter(r=>r.late.length);else if(S.cycleStage)rows=rows.filter(r=>r.cur===S.cycleStage);
   if(q)rows=rows.filter(r=>(r.c.name+" "+(r.c.am||"")).toLowerCase().includes(q));
-  rows.sort((a,b)=>(b.late.length-a.late.length)||(CYCLE.findIndex(x=>x[0]===a.cur)-CYCLE.findIndex(x=>x[0]===b.cur))||a.c.name.localeCompare(b.c.name));
-  const label=k=>k==="complete"?"Paid · complete":k==="running"?"Month running":(CYCLE.find(x=>x[0]===k)||[])[1];
-  const chips=`<div class="pf-bar cy-stages" role="group" aria-label="Where each brand is"><button data-cystage="" aria-pressed="${!S.cycleStage}">All brands <b>${cache.rows.length}</b></button>${lateN?`<button data-cystage="late" aria-pressed="${S.cycleStage==="late"}" class="cy-late-btn">Something late <b>${lateN}</b></button>`:""}${[...CYCLE.map(x=>x[0]).slice(0,4),"running",...CYCLE.map(x=>x[0]).slice(4),"complete"].filter(k=>counts[k]).map(k=>`<button data-cystage="${k}" aria-pressed="${S.cycleStage===k}">${k==="running"?"":"At "}${esc(label(k))} <b>${counts[k]}</b></button>`).join("")}<input id="cy-q" type="search" placeholder="Find a brand or AM" value="${esc(S.cycleQ||"")}" style="min-width:180px;margin-left:auto"></div>`;
-  const th=CYCLE.map(([k,l,o,due])=>`<th class="cy-h" title="${esc(o)} · ${esc(due)}"><span>${esc(l)}</span><small>${esc(o)}</small></th>`).join("");
-  const body=rows.map(r=>`<tr><td class="cy-brand"><b>${esc(r.c.name)}</b><small>AM ${esc(r.c.am||"—")} · ${esc(cycleDates(r.c.name,m))}</small></td>${CYCLE.map(([k])=>{const x=r.st[k];return`<td><button class="cy-cell ${x.s}" data-cygo="${k}|${esc(r.c.name)}|${m}" title="${esc(label(k))}: ${esc(String(x.t).replace(/<[^>]+>/g,""))}"><i aria-hidden="true">${CY_ICON[x.s]}</i><span>${x.t}</span></button></td>`}).join("")}<td><span class="chip ${r.cur==="complete"?"ok":r.late.length?"bad":r.cur==="running"?"info":""}">${esc(label(r.cur))}</span></td></tr>`).join("");
+  rows.sort((a,b)=>(b.late.length-a.late.length)||(stgKeys.indexOf(a.cur)-stgKeys.indexOf(b.cur))||a.c.name.localeCompare(b.c.name));
+  const label=k=>k==="delivered"?"Delivered · approved":k==="complete"?"Paid · complete":k==="running"?"Month running":(CYCLE.find(x=>x[0]===k)||[])[1];
+  const chips=`<div class="pf-bar cy-stages" role="group" aria-label="Where each brand is"><button data-cystage="" aria-pressed="${!S.cycleStage}">All brands <b>${cache.rows.length}</b></button>${lateN?`<button data-cystage="late" aria-pressed="${S.cycleStage==="late"}" class="cy-late-btn">Something late <b>${lateN}</b></button>`:""}${[...stgKeys.slice(0,4),"running",...stgKeys.slice(4),bill?"complete":"delivered"].filter(k=>counts[k]).map(k=>`<button data-cystage="${k}" aria-pressed="${S.cycleStage===k}">${k==="running"?"":"At "}${esc(label(k))} <b>${counts[k]}</b></button>`).join("")}<input id="cy-q" type="search" placeholder="Find a brand or AM" value="${esc(S.cycleQ||"")}" style="min-width:180px;margin-left:auto"></div>`;
+  const th=STG.map(([k,l,o,due])=>`<th class="cy-h" title="${esc(o)} · ${esc(due)}"><span>${esc(l)}</span><small>${esc(o)}</small></th>`).join("");
+  const body=rows.map(r=>`<tr><td class="cy-brand"><b>${esc(r.c.name)}</b><small>AM ${esc(r.c.am||"—")} · ${esc(cycleDates(r.c.name,m))}</small></td>${STG.map(([k])=>{const x=r.st[k];return`<td><button class="cy-cell ${x.s}" data-cygo="${k}|${esc(r.c.name)}|${m}" title="${esc(label(k))}: ${esc(String(x.t).replace(/<[^>]+>/g,""))}"><i aria-hidden="true">${CY_ICON[x.s]}</i><span>${x.t}</span></button></td>`}).join("")}<td><span class="chip ${r.cur==="complete"||r.cur==="delivered"?"ok":r.late.length?"bad":r.cur==="running"?"info":""}">${esc(label(r.cur))}</span></td></tr>`).join("");
   return head+chips+`<div class="legend cy-legend"><span><i class="cy-k done">✓</i>Done</span><span><i class="cy-k prog">●</i>In progress</span><span><i class="cy-k late">!</i>Late</span><span><i class="cy-k todo">○</i>Not started yet</span><span><i class="cy-k na">–</i>Not part of this brand's work</span><span class="muted">Click any stage to open it.</span></div>
   <section class="panel"><div class="scroll"><table class="cy-table"><thead><tr><th>Brand</th>${th}<th>Now at</th></tr></thead><tbody>${body||`<tr><td colspan="10"><div class="empty">No brands match.</div></td></tr>`}</tbody></table></div></section>`;
 }
@@ -3758,6 +3755,56 @@ function nextId(client,dept){
 
 /* ---------- events ---------- */
 function persist(){store("abhq.tab",S.tab)}
+/* ===== CEO: view the app as anyone ===== */
+function viewAsLabel(p){
+  if(!p)return"";
+  if(p.dept==="Founder's Office")return"Founder's Office";
+  if(p.role==="manager")return"Account Manager / Team lead";
+  return ROLE_LABEL[p.role]||"Employee";
+}
+function accessMatrixHTML(){
+  const cols=["CEO","Operations","Founder's Office","Account Manager","Employee","HR","Finance","Brand"];
+  const Y="✓",N="—";
+  const rows=[
+    ["Tasks","All","All","All","Their team & brands","Own + tasks they raised",N,N,"Their own work (if switched on)"],
+    ["Content calendar & posting times","All","All","All","Their brands","Designers: their posts",N,N,"Their calendar (if on)"],
+    ["Account cycle","All brands, up to Paid","All brands, up to Paid","All brands, up to delivery","Their brands, up to delivery","Their brands, up to delivery","All brands, up to delivery","All brands, up to Paid",N],
+    ["Delivery check · approve & send to Finance",Y,Y,"View only",N,N,N,"View",N],
+    ["Bills · add PI / invoice",Y,"View",N,N,N,N,Y,"Their own bills (if on)"],
+    ["Client feedback · reply",Y,Y,Y,"Their brands",N,N,N,"Send notes"],
+    ["Active hours (HQ, not greytHR)","All","All","All","Their team","Their team, if they lead one","All",N,N],
+    ["Performance · KRA & KPI","All","Team","All","Their team","Own","All",N,N],
+    ["SOPs & policies","Edit + approve","Read","Read","Read","Read","Edit","Read",N],
+    ["Download data",Y,Y,N,N,N,Y,Y,"Own reports"],
+    ["Clients & teams set-up",Y,Y,Y,N,N,N,N,N],
+    ["Logins & access levels","All","Logins only","Logins only",N,N,N,N,N],
+    ["Schedule, calls, chat",Y,Y,Y,Y,Y,Y,Y,N],
+    ["Notes","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared","Own + shared",N],
+    ["View the app as someone",Y,N,N,N,N,N,N,N]];
+  return`<div class="scroll"><table class="va-matrix"><thead><tr><th>What</th>${cols.map(c=>`<th>${c}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr><td><b style="font-weight:600">${r[0]}</b></td>${r.slice(1).map(v=>`<td class="${v===N?"va-no":v===Y?"va-yes":""}">${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+  <p class="muted" style="font-size:12px;margin:8px 0 0">Operations = Vineet and Priyanka. Founder's Office = Sehej. Brands never see other brands, and only see sections you switch on in Client portal. Each person's private notes stay private, even in "View as".</p>`;
+}
+function openViewAs(){
+  if(!S.isOwner)return;
+  S.drawer={kind:"viewas"};
+  const staff=S.team.filter(p=>p.role!=="client"&&p.active!==false&&p.name!==S.realMe);
+  const groups={};staff.forEach(p=>{const g=p.dept||"Other";(groups[g]=groups[g]||[]).push(p)});
+  const brands=S.clients.slice().sort((a,b)=>a.name.localeCompare(b.name));
+  const row=(key,attr,title,sub,tag)=>`<button class="va-row" ${attr} data-vakey="${esc(key.toLowerCase())}"><span class="avatar">${esc(initials(title))}</span><span class="va-txt"><b>${esc(title)}</b><small>${esc(sub)}</small></span><span class="pill">${esc(tag)}</span></button>`;
+  $("#drawerHost").innerHTML=`<div class="scrim" data-close="1"></div><aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="dva" style="width:min(720px,100%)">
+  <header><div><div class="eyebrow">CEO only · read-only</div><h2 id="dva" style="margin-top:4px">View the app as someone</h2><div class="muted">Pick a person or a brand to see their screens and tabs. Nothing can be changed while viewing.</div></div><button class="btn ghost" data-close="1" aria-label="Close">✕</button></header>
+  <div class="content">
+    <input id="va-q" type="search" placeholder="Search a name, department or brand…" aria-label="Search" style="width:100%;margin-bottom:12px">
+    ${S.me!==S.realMe||S.portalPreview?`<button class="btn" data-endpreview="1" style="margin-bottom:12px">Back to my CEO view</button>`:""}
+    <div id="va-list">
+    ${Object.keys(groups).sort().map(g=>`<div class="va-group" data-vagroup="1"><div class="eyebrow" style="margin:10px 0 6px">${esc(g)}</div>${groups[g].sort((a,b)=>a.name.localeCompare(b.name)).map(p=>row(p.name+" "+g+" "+(p.position||"")+" "+viewAsLabel(p),`data-vaperson="${esc(p.name)}"`,p.name,[p.position,p.office].filter(Boolean).join(" · ")||g,viewAsLabel(p))).join("")}</div>`).join("")}
+    <div class="va-group" data-vagroup="1"><div class="eyebrow" style="margin:14px 0 6px">Brands (client portal)</div>${brands.map(c=>row(c.name+" brand client portal",`data-pportal="${esc(c.name)}"`,c.name,c.portal_on?"Portal is on":"Portal is off: shows what they'd see once it's on","Brand")).join("")}</div>
+    </div>
+    <details class="va-who" style="margin-top:18px"><summary><b>Who can see what</b> (all access levels)</summary>${accessMatrixHTML()}</details>
+  </div></aside>`;
+  const q=$("#va-q");q.focus();
+  q.addEventListener("input",()=>{const v=q.value.trim().toLowerCase();document.querySelectorAll("#va-list .va-row").forEach(r=>r.hidden=!!v&&!r.dataset.vakey.includes(v));document.querySelectorAll("#va-list .va-group").forEach(g=>g.hidden=![...g.querySelectorAll(".va-row")].some(r=>!r.hidden))});
+}
 function setMe(name){
   if(!S.isOwner)return;
   store("abhq.preview",name===S.realMe?null:name);
@@ -3768,7 +3815,9 @@ document.addEventListener("click",async e=>{
   const b=e.target.closest("button,tr.click");if(!b)return;
   const d=b.dataset;
   if(d.whoami){if(S.me!==S.realMe){setMe(S.realMe);S.tab="access";render()}else openAccount();return}
-  if(d.endpreview){setMe(S.realMe);S.tab="access";render();return}
+  if(d.endpreview){if(S.portalPreview){S.portalPreview=null;S.portal=null;clearInterval(portalTimer)}closeDrawer();setMe(S.realMe);S.tab=null;render();return}
+  if(d.viewas){openViewAs();return}
+  if(d.vaperson){if(S.portalPreview){S.portalPreview=null;S.portal=null;clearInterval(portalTimer)}closeDrawer();setMe(d.vaperson);toast("Viewing as "+d.vaperson);return}
   if(d.authview){S.authView=d.authview;render();return}
   if(d.signout){closeDrawer();store("abhq.preview",null);await sb.auth.signOut();S.authView="login";render();return}
   if(d.bell){openNotifs();return}
@@ -3924,8 +3973,8 @@ document.addEventListener("click",async e=>{
   if(d.delivery){openDelivery(d.delivery);return}
   if(d.savedl){if(await saveCheck(d.savedl,{notes:$("#dl-notes").value.trim()||null}))closeDrawer();return}
   if(d.portalretry){S.portalError=null;render();await loadPortal(S.portalPreview||undefined);render();return}
-  if(d.pportal){S.portalPreview=d.pportal;S.portal=null;S.tab="p-home";render();await loadPortal(d.pportal);startPortalRefresh();render();window.scrollTo(0,0);return}
-  if(d.endpportal){S.portalPreview=null;S.portal=null;clearInterval(portalTimer);S.tab="portal";render();return}
+  if(d.pportal){closeDrawer();S.portalPreview=d.pportal;S.portal=null;S.tab="p-home";render();await loadPortal(d.pportal);startPortalRefresh();render();window.scrollTo(0,0);return}
+  if(d.endpportal){S.portalPreview=null;S.portal=null;clearInterval(portalTimer);if(d.endpportal==="ceo"){setMe(S.realMe);return}S.tab="portal";render();return}
   if(d.managec){openPortalClient(d.managec);return}
   if(d.savenote){await updateClient(d.savenote,{portal_note:$("#pc-note").value.trim()||null});openPortalClient(d.savenote);return}
   if(d.rmcontact){await removeContact(d.rmcontact,d.rmemail,d.rmclient,b);return}
