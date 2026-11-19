@@ -492,6 +492,8 @@ button.tl-lab:hover{background:var(--sunk)}
 <script src="config.js"></script>
 <script src="vendor/supabase.js"></script>
 <script>
+const APP_HOME=location.origin+location.pathname.replace(/[^/]*$/,"");
+
 (() => {
 const STATUSES=["Requested","In progress","Internal review","Client approval","Done","Blocked","On hold"];
 const FLOW=["Requested","In progress","Internal review","Client approval","Done"];
@@ -3362,8 +3364,8 @@ async function startForm(kind,client,btn,quiet){
 function formMessage(f){
   const c=S.clients.find(x=>x.name===f.client);
   return f.kind==="onboarding"
-    ?`Hi! Welcome to At Buzz 🎉\n\nTo get started, please fill in a short onboarding form in your At Buzz client portal:\n${location.origin}\n\nSign in, open the "Onboarding" tab, and answer the questions (about 10 minutes). You can save and come back any time. Share brand files as Google Drive links.\n\nYour Account Manager: ${c?.am||""}`
-    :`Hi! Thank you for working with At Buzz.\n\nWe'd really value your feedback. It takes 2 minutes in your client portal:\n${location.origin}\n\nSign in and open the "Feedback" tab.\n\nYour Account Manager: ${c?.am||""}`;
+    ?`Hi! Welcome to At Buzz 🎉\n\nTo get started, please fill in a short onboarding form in your At Buzz client portal:\n${APP_HOME}\n\nSign in, open the "Onboarding" tab, and answer the questions (about 10 minutes). You can save and come back any time. Share brand files as Google Drive links.\n\nYour Account Manager: ${c?.am||""}`
+    :`Hi! Thank you for working with At Buzz.\n\nWe'd really value your feedback. It takes 2 minutes in your client portal:\n${APP_HOME}\n\nSign in and open the "Feedback" tab.\n\nYour Account Manager: ${c?.am||""}`;
 }
 function printForm(id){
   const f=S.forms.find(x=>x._id===id);if(!f)return;
@@ -4336,7 +4338,7 @@ async function manageLogin(action,email,btn){
 function showCredentials(name,email,password,isReset){
   const msg=`Hi ${first(name)}, ${isReset?"your At Buzz HQ password has been reset":"your At Buzz HQ login is ready"}.
 
-Open: ${location.origin}
+Open: ${APP_HOME}
 Email: ${email}
 Temporary password: ${password}
 
@@ -4441,13 +4443,13 @@ document.addEventListener("submit",async e=>{
   });
   if(f.id==="magicForm")return go(async()=>{
     const email=$("#m-email").value.trim();if(!email){toast("Enter your email");return}
-    const {error}=await sb.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:location.origin}});
+    const {error}=await sb.auth.signInWithOtp({email,options:{shouldCreateUser:false,emailRedirectTo:APP_HOME}});
     if(error){toast(/signups? not allowed|not found/i.test(error.message)?"That email doesn't have a login yet. Ask the CEO to invite you.":error.message);return}
     S.sentMsg=`We sent a sign-in link to ${email}. Open it on this device.`;S.authView="sent";render();
   });
   if(f.id==="resetForm")return go(async()=>{
     const email=$("#r-email").value.trim();if(!email){toast("Enter your email");return}
-    const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:location.origin});
+    const {error}=await sb.auth.resetPasswordForEmail(email,{redirectTo:APP_HOME});
     if(error){toast(error.message);return}
     S.sentMsg=`If ${email} has a login, a reset link is on its way.`;S.authView="sent";render();
   });

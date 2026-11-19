@@ -1,0 +1,17 @@
+# Keeps the free Supabase project awake (free projects pause after 7 days with no activity).
+# Runs once a day and makes one tiny read with the public anon key from config.js.
+name: Keep Supabase awake
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ping Supabase
+        run: |
+          URL=$(grep -o 'https://[a-z0-9]*\.supabase\.co' config.js)
+          KEY=$(grep -o 'supabaseAnonKey: *"[^"]*"' config.js | sed 's/.*"\(.*\)"/\1/')
+          curl -fsS "$URL/rest/v1/app_settings?select=id&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -o /dev/null -w "Supabase answered %{http_code}\n"
